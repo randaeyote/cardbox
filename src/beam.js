@@ -1,4 +1,5 @@
-import { scaledCanvas, canvasToJpeg, canvasToWebp } from './crop.js'
+import { scaledCanvas, decodeScaled, canvasToJpeg, canvasToWebp } from './crop.js'
+import { seededRandom } from './collage.js'
 
 // Sends one card or sticker to another phone as an endless stream of QR codes ("beaming"): no network needed.
 // The card is packed small (photos shrunk and re-encoded), cut into blocks, and sent as a fountain code: the plain
@@ -51,21 +52,11 @@ export function splitParts(bytes) {
   return { ...json, parts }
 }
 
-// mulberry32: a tiny seeded generator, so sender and receiver derive the same block choices from a frame's seed.
-function random(seed) {
-  return () => {
-    seed = (seed + 0x6d2b79f5) | 0
-    let value = Math.imul(seed ^ (seed >>> 15), 1 | seed)
-    value = (value + Math.imul(value ^ (value >>> 7), 61 | value)) ^ value
-    return ((value ^ (value >>> 14)) >>> 0) / 0x100000000
-  }
-}
-
 // Which blocks a frame mixes. Seeds below the block count are the plain blocks themselves; the rest take each
 // block with even odds, which is what lets almost any set of frames be solved.
 export function blocksFor(seed, count) {
   if (seed < count) return [seed]
-  const next = random(seed)
+  const next = seededRandom(seed)
   const chosen = []
   for (let index = 0; index < count; index++) if (next() < 0.5) chosen.push(index)
   return chosen.length ? chosen : [seed % count]
@@ -174,12 +165,7 @@ const blobBytes = async (blob) => new Uint8Array(await blob.arrayBuffer())
 const compressed = (canvas, transparent = false) => canvasToWebp(canvas, { quality: PHOTO_QUALITY, transparent })
 const part = async (name, blob) => ({ name, type: blob.type, bytes: await blobBytes(blob) })
 
-async function shrunk(blob) {
-  const bitmap = await createImageBitmap(blob)
-  const canvas = scaledCanvas(bitmap, PHOTO_DIMENSION)
-  bitmap.close?.()
-  return canvas
-}
+const shrunk = (blob) => decodeScaled(blob, PHOTO_DIMENSION)
 
 // A sticker goes as one WebP, transparency included. Without WebP, its transparency doesn't survive JPEG, so it
 // travels as a JPEG of its colours plus a greyscale JPEG of its alpha (a solid shape, so a few KB; far smaller than a

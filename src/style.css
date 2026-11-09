@@ -10,6 +10,10 @@
   --group-radius: 24px;
   --segment: var(--card);
 }
+/* Resolved per scope, so the always-dark camera and editor (which redefine --fg) get their own. */
+:root, .cropper.rapid, .cropper.editor {
+  --hairline: color-mix(in srgb, var(--fg) 10%, transparent); --group-fill: color-mix(in srgb, var(--fg) 7%, transparent);
+}
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #151517; --fg: #ececee; --muted: #9a9aa0; --card: #222226; --line: #36363b; --accent: #2f7cf6; --danger: #f2736b;
@@ -67,44 +71,45 @@ button:active:not(:disabled), .button:active { transform: scale(0.97); }
 .empty-state > svg { width: 72px; height: 72px; }
 .empty-state h2 { font-size: 1.4rem; font-weight: 700; }
 .empty-state p { margin: 0 0 12px; }
-.tutorial-language { --fill: transparent; gap: 6px; color: var(--muted); font-weight: 500; }
-.empty-language { --fill: transparent; gap: 6px; margin-top: 8px; color: var(--muted); font-weight: 500; }
+.tutorial-language, .empty-language { --fill: transparent; gap: 6px; color: var(--muted); font-weight: 500; }
+.empty-language { margin-top: 8px; }
 .empty-state > .glass, .empty-state > .primary { align-self: stretch; justify-content: center; gap: 8px; min-height: 50px; border-radius: 999px; }
 .logo-slot { fill: #000; opacity: 0.3; }
 .settings-list > .backup-warning { justify-content: flex-start; font-weight: 400; }
 .backup-warning > [aria-hidden] { color: #ff9f0a; font-size: 1.1rem; }
 .storage-warning { margin: 0 0 12px; padding: 12px 16px; border-radius: var(--group-radius); background: color-mix(in srgb, #ff9f0a 16%, var(--card)); font-size: 0.9rem; }
 .storage-warning > [aria-hidden] { color: #ff9f0a; }
-.list-header .nav-icon { position: relative; }
 :has(> .beta) { position: relative; }
 .beta { position: absolute; top: -2px; right: -6px; padding: 1px 5px; border-radius: 999px; background: var(--accent); color: #fff; font-size: 0.55rem; font-weight: 700; line-height: 1.3; pointer-events: none; }
 .badge { position: absolute; top: 4px; right: 4px; width: 10px; height: 10px; border-radius: 50%; background: var(--danger); }
+dialog.settings, dialog.collection-sheet {
+  margin: auto auto 0; width: 100%; overflow: auto; border: 0; background: var(--bg); color: var(--fg);
+}
 dialog.settings {
-  margin: auto auto 8px; width: calc(100% - 16px); max-width: 560px; height: 85dvh; max-height: none; overflow: auto; border: 0;
-  border-radius: 36px; padding: 16px 20px calc(24px + env(safe-area-inset-bottom));
-  background: var(--bg); color: var(--fg); transition: translate 0.25s ease-out;
+  max-width: 560px; height: 85dvh; max-height: none; border-radius: 36px 36px 0 0; padding: 16px 20px calc(24px + env(safe-area-inset-bottom));
+  transition: translate 0.25s ease-out;
 }
 @starting-style { dialog.settings[open] { translate: 0 100%; } }
-dialog.settings::backdrop, dialog.collection-sheet::backdrop { background: rgb(0 0 0 / 0.45); }
-dialog.collection-sheet {
-  margin: auto auto 8px; width: calc(100% - 16px); max-width: 480px; max-height: 80dvh; overflow: auto; border: 0;
-  border-radius: 28px; padding: 12px 16px calc(20px + env(safe-area-inset-bottom)); background: var(--bg); color: var(--fg);
-}
+dialog.settings::backdrop, dialog.collection-sheet::backdrop, dialog.alert::backdrop { background: rgb(0 0 0 / 0.45); }
+dialog.collection-sheet { max-width: 480px; max-height: 80dvh; border-radius: 32px 32px 0 0; padding: 18px 20px calc(20px + env(safe-area-inset-bottom)); }
+dialog.collection-sheet .list-header { margin-bottom: 14px; }
 dialog.collection-sheet h2 { flex: 1; font-size: 1.1rem; }
 dialog.collection-sheet [role=checkbox] .check { width: 1.2em; text-align: center; color: var(--accent); font-weight: 700; }
 dialog.collection-sheet input { padding: 12px 16px; }
 .settings-group { display: flex; flex-direction: column; gap: 6px; }
-.settings-group h2 { margin: 16px 0 2px 4px; font-weight: 700; }
+.settings-group h2 { margin: 16px 0 2px 4px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+.settings-group h2 svg { flex: none; width: 1.1em; height: 1.1em; color: var(--accent); }
 /* iOS-style grouped rows: one rounded card per section, thin lines between rows, label left, › or value right. */
-.settings-list { display: flex; flex-direction: column; border-radius: var(--group-radius); overflow: hidden; background: color-mix(in srgb, var(--fg) 7%, transparent); }
+.settings-list { display: flex; flex-direction: column; border-radius: var(--group-radius); overflow: hidden; background: var(--group-fill); }
 .settings-list > * {
   --fill: transparent; display: flex; flex-direction: row; justify-content: space-between; align-items: center; gap: 12px;
   min-height: 50px; padding: 12px 16px; border-radius: 0; text-align: left; color: var(--fg); font-size: 1rem; font-weight: 500;
 }
-.settings-list > * + * { border-top: 1px solid color-mix(in srgb, var(--fg) 10%, transparent); }
+.settings-list > * + * { border-top: 1px solid var(--hairline); }
 .settings-list > :hover:not(:disabled) { --fill: color-mix(in srgb, var(--fg) 6%, transparent); }
-.settings-list > :active:not(:disabled) { transform: none; --fill: color-mix(in srgb, var(--fg) 10%, transparent); }
+.settings-list > :active:not(:disabled) { transform: none; --fill: var(--hairline); }
 .settings-list > .danger { color: var(--danger); }
+.settings-list input[type=checkbox] { flex: none; margin: 0; accent-color: var(--accent); }
 .collection-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
 .collection-chips .chip { display: inline-flex; align-items: center; gap: 2px; padding: 2px 4px 2px 10px; border-radius: 999px; background: color-mix(in srgb, var(--fg) 12%, transparent); color: var(--fg); font-weight: 500; }
 .collection-chips .chip button { --fill: transparent; min-height: 0; width: 24px; height: 24px; padding: 0; color: var(--muted); font-size: 1.1rem; }
@@ -119,14 +124,22 @@ dialog.collection-sheet input { padding: 12px 16px; }
   text-align: right; text-align-last: right; appearance: none; -webkit-appearance: none; font-weight: 400;
 }
 .sync-qr { width: min(260px, 70vw); align-self: center; border-radius: 16px; overflow: hidden; }
-.sync-qr svg { display: block; width: 100%; height: auto; }
-.sync-video { width: 100%; max-height: 60dvh; object-fit: cover; border-radius: 16px; background: #000; }
+.sync-qr svg, .beam-qr svg { display: block; width: 100%; height: auto; }
+/* Cards the other device deleted: a grid of ticked tiles; unticked ones (kept) fade back. */
+.sync-deletes { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 12px; }
+.sync-deletes label { position: relative; gap: 6px; align-items: center; color: var(--fg); cursor: pointer; }
+.sync-deletes img, .sync-deletes label > div { max-width: 100%; max-height: 120px; }
+.sync-deletes label > div { width: 100%; height: 120px; }
+.sync-deletes img:not(.sticker) { border-radius: 6px; }
+.sync-deletes input { position: absolute; top: 4px; left: 4px; z-index: 1; width: 22px; height: 22px; margin: 0; accent-color: var(--danger); }
+.sync-deletes .kept img { opacity: 0.4; }
+.sync-deletes span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.8rem; }
 .settings-page, .sync { display: flex; flex-direction: column; gap: 8px; }
 /* As iOS's iPhone Storage: name and total on top, one bar split by kind, a legend of coloured dots. */
-.storage { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; border-radius: var(--group-radius); background: color-mix(in srgb, var(--fg) 7%, transparent); }
+.storage { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; border-radius: var(--group-radius); background: var(--group-fill); }
 .storage-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; font-weight: 600; }
 .storage-head .muted { font-weight: 400; }
-.storage-bar { display: flex; gap: 2px; height: 14px; border-radius: 4px; overflow: hidden; background: color-mix(in srgb, var(--fg) 10%, transparent); }
+.storage-bar { display: flex; gap: 2px; height: 14px; border-radius: 4px; overflow: hidden; background: var(--hairline); }
 .storage-bar > span { min-width: 3px; }
 .storage-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 0.85rem; }
 .storage-legend span { display: inline-flex; align-items: center; gap: 6px; }
@@ -138,10 +151,13 @@ dialog.collection-sheet input { padding: 12px 16px; }
 /* QR codes read best big, dark on white, edge to edge; the white also lights up the other phone's view. */
 .beam { display: flex; flex-direction: column; gap: 12px; max-width: 560px; margin: 0 auto; }
 .beam-qr { width: min(100%, 70dvh); align-self: center; background: #fff; border-radius: 16px; overflow: hidden; }
-.beam-qr svg { display: block; width: 100%; height: auto; }
+.qr-link { display: flex; align-items: center; align-self: center; max-width: min(100%, 70dvh); padding: 6px 10px; border: 0; border-radius: 10px; background: none; color: var(--muted); font: 13px ui-monospace, monospace; white-space: nowrap; cursor: pointer; }
+.qr-link:active { background: var(--line); }
+.qr-link-start { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.qr-link svg { flex: none; width: 16px; height: 16px; margin-inline-start: 8px; fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .beam-estimate { margin: 0; text-align: center; font-weight: 600; font-variant-numeric: tabular-nums; }
 /* iOS segmented control: a tinted track with the chosen option on a raised pill. */
-.segmented { display: flex; padding: 3px; border-radius: 10px; background: color-mix(in srgb, var(--fg) 10%, transparent); }
+.segmented { display: flex; padding: 3px; border-radius: 10px; background: var(--hairline); }
 .segmented > button { --fill: transparent; flex: 1; min-height: 34px; padding: 4px 12px; border-radius: 8px; color: var(--fg); font-size: 0.9rem; font-weight: 600; }
 .segmented > [aria-checked=true] { --fill: var(--segment); box-shadow: 0 1px 4px rgb(0 0 0 / 0.2); }
 .beam-progress { width: 100%; accent-color: var(--accent); }
@@ -149,7 +165,8 @@ dialog.collection-sheet input { padding: 12px 16px; }
 @keyframes settings-push { from { translate: 24px 0; opacity: 0; } }
 .settings-note { margin: 0 16px; font-size: 0.8rem; color: var(--muted); }
 .settings-list > [role=radio][aria-checked=true]::after { content: '✓'; color: var(--accent); font-weight: 700; }
-.build { font-size: 0.75rem; text-align: center; margin-top: 24px; }
+.build { font-size: 0.75rem; text-align: center; margin-top: 24px; line-height: 1.6; }
+.build a { color: inherit; }
 /* Floating glass pieces over the content (each control its own capsule, as in iOS 27 Photos), not a bar pinned to
    the edge. The row itself is invisible and lets taps through between them. */
 .action-bar {
@@ -158,13 +175,16 @@ dialog.collection-sheet input { padding: 12px 16px; }
   justify-content: space-between; align-items: center;
 }
 .action-bar > * { pointer-events: auto; border-radius: 999px; }
-.action-bar > span { visibility: hidden; }
 .list-header .nav-action svg { width: 28px; height: 28px; }
 .list-header .collage-button { padding: 0 14px 0 10px; background: var(--accent); border-color: transparent; color: #fff; font-weight: 600; box-shadow: 0 6px 18px -6px var(--accent); }
 .list-header .collage-button svg { width: 22px; height: 22px; }
 .list-header .nav-action.primary { background: var(--accent); border-color: transparent; color: #fff; }
 .action-bar button { flex: none; gap: 6px; min-height: 50px; padding: 0 20px; color: var(--fg); }
 .action-bar button:disabled { color: var(--muted); cursor: default; }
+.action-bar .select-delete { width: 50px; padding: 0; justify-content: center; color: var(--danger); }
+/* Select mode's buttons: centred, not at the start of an otherwise empty bar. */
+.action-bar:has(> .edit-collections) { justify-content: center; }
+.action-bar .edit-collections:not(:disabled) { background: var(--accent); border-color: transparent; color: #fff; box-shadow: 0 8px 24px -6px var(--accent); }
 /* Cards / Stickers: one glass capsule holding both tabs, as in iOS Photos: plain tabs in full colour, the chosen one blue on a recessed pill. */
 /* The camera beside it is a circle the capsule's height: tab 52px + 4px padding each side + 1px border each side. */
 .action-bar .tab-bar { display: flex; padding: 4px; }
@@ -206,6 +226,7 @@ dialog.collection-sheet input { padding: 12px 16px; }
 .cropper-magnifier::after { top: 50%; left: 10%; right: 10%; height: 1px; }
 .cropper-error { margin: 0; color: var(--danger); text-align: center; }
 .cropper-actions { display: flex; gap: 8px; }
+.cropper-actions > * { flex: 1; }
 /* Photos-editor bars: cancel or back, Reset and the finishing ✓ above the photo; how to finish, or the adjust tools, below. */
 .editor-top { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; }
 .editor-top > :last-child { grid-column: 3; justify-self: end; }
@@ -216,7 +237,6 @@ dialog.collection-sheet input { padding: 12px 16px; }
 .editor-done:disabled { background: var(--glass); color: var(--muted); }
 .editor-bottom { display: flex; align-items: center; gap: 12px; width: min(100%, 560px); align-self: center; }
 .editor-bottom .slider { flex: 1; min-width: 0; }
-.cropper-actions > * { flex: 1; }
 .cropper button:disabled { opacity: 0.5; }
 .hint { margin: 0; font-size: 13px; text-align: center; }
 .detail-media { display: flex; flex-direction: column; gap: 12px; }
@@ -259,12 +279,11 @@ main.detail > header {
   border: 0; border-radius: 10px; background: none; box-shadow: none; color: var(--fg); font-size: 1rem; font-weight: 400; text-align: start; cursor: pointer;
 }
 .background-menu > * + * { position: relative; }
-.background-menu > * + *::before { content: ''; position: absolute; top: 0; left: 14px; right: 14px; border-top: 1px solid color-mix(in srgb, var(--fg) 10%, transparent); }
+.background-menu > * + *::before { content: ''; position: absolute; top: 0; left: 14px; right: 14px; border-top: 1px solid var(--hairline); }
 .background-menu > *:hover, .background-menu > *:active { background: color-mix(in srgb, var(--fg) 8%, transparent); transform: none; }
-.background-menu [aria-pressed=true]::after { content: '✓'; margin-inline-start: auto; color: var(--accent); font-weight: 700; }
+.background-menu [aria-pressed=true]::after { content: '✓'; order: 2; margin-inline-start: auto; color: var(--accent); font-weight: 700; }
 .background-menu .background-swatch { order: 1; flex: none; box-sizing: border-box; width: 28px; height: 28px; min-width: 0; min-height: 0; margin-inline-start: auto; padding: 0; border: 2px solid color-mix(in srgb, var(--fg) 25%, transparent); border-radius: 50%; background: none; cursor: pointer; }
 .background-menu [aria-pressed=true] .background-swatch { margin-inline-end: 10px; }
-.background-menu [aria-pressed=true]::after { order: 2; }
 .background-menu label[aria-pressed=true]::after { margin-inline-start: 0; }
 .background-swatch::-webkit-color-swatch-wrapper { padding: 0; }
 .background-swatch::-webkit-color-swatch { border: 0; border-radius: 50%; }
@@ -284,8 +303,8 @@ main.detail > header {
 .collage-sliders { display: none; flex-direction: column; gap: 4px; }
 .collage-sliders.open { display: flex; }
 /* Flat pills like the shuffle one beside it, not the glass circles used over photos. */
-.group-photo-screen .cropper-actions .icon-button { background: color-mix(in srgb, var(--fg) 10%, transparent); border: 0; box-shadow: none; backdrop-filter: none; }
-.collage-adjust[aria-pressed=true] { background: color-mix(in srgb, var(--fg) 22%, transparent) !important; }
+.group-photo-screen .cropper-actions .icon-button { background: var(--hairline); border: 0; box-shadow: none; backdrop-filter: none; }
+.group-photo-screen .cropper-actions .collage-adjust[aria-pressed=true] { background: color-mix(in srgb, var(--fg) 22%, transparent); }
 .group-photo-screen .icon-button { width: 48px; height: 48px; min-height: 0; }
 .group-photo-screen .seed {
   flex: none; width: 5em; min-height: 44px; margin-left: auto; padding: 0; background: none; border: none; color: var(--muted);
@@ -299,9 +318,9 @@ main.detail > header {
   /* Right under the controls, not at the bottom of the screen. */
   .group-photo-screen > .cropper-actions { align-self: start; margin-top: 8px; }
   /* Matches the Settings page's grouped rows: label left, value right. */
-  .group-photo-options { flex-direction: column; gap: 0; border-radius: var(--group-radius); overflow: hidden; background: color-mix(in srgb, var(--fg) 7%, transparent); }
+  .group-photo-options { flex-direction: column; gap: 0; border-radius: var(--group-radius); overflow: hidden; background: var(--group-fill); }
   .collage-option { flex: none; align-items: center; gap: 12px; min-height: 50px; padding: 0 16px; }
-  .collage-option + .collage-option { border-top: 1px solid color-mix(in srgb, var(--fg) 10%, transparent); }
+  .collage-option + .collage-option { border-top: 1px solid var(--hairline); }
   .collage-option > span { position: static; width: auto; height: auto; overflow: visible; clip-path: none; color: var(--fg); font-size: 1rem; font-weight: 500; }
   .collage-option select {
     min-height: 0; padding: 12px 20px 12px 0; border: 0; border-radius: 0; background: var(--chevron) no-repeat right center / 12px;
@@ -311,9 +330,8 @@ main.detail > header {
   .collage-fit { flex: none; justify-content: flex-start; min-height: 50px; padding: 0 16px; border: 0; border-radius: 0; background: none; box-shadow: none; color: var(--fg); font-size: 1rem; font-weight: 500; }
   .collage-fit[aria-pressed=true] { background: none; color: var(--fg); }
   .collage-fit[aria-pressed=true]::after { content: '✓'; margin-inline-start: auto; color: var(--accent); font-weight: 700; }
-  .collage-fit + .collage-option { border-top: 1px solid color-mix(in srgb, var(--fg) 10%, transparent); }
-  .collage-sliders { padding: 4px 16px 0; }
-  .collage-sliders { display: flex; margin-top: 8px; }
+  .collage-fit + .collage-option { border-top: 1px solid var(--hairline); }
+  .collage-sliders { display: flex; padding: 4px 16px 0; margin-top: 8px; }
   .collage-adjust { display: none; }
 }
 .slider { flex-direction: row; align-items: center; gap: 12px; color: var(--fg); font-size: 1rem; }
@@ -325,6 +343,8 @@ main.detail > header {
 .card3d {
   position: relative; transform-style: preserve-3d; touch-action: none; user-select: none; -webkit-user-select: none;
   cursor: grab;
+  /* A sideways back is laid out turned (wider than the stage) before rotating into it: don't let the stage squeeze it. */
+  flex: none;
 }
 .card3d-face {
   position: absolute; inset: 0; border-radius: 10px; overflow: hidden; backface-visibility: hidden; -webkit-backface-visibility: hidden;
@@ -339,7 +359,7 @@ main.detail > header {
 .settings-list > .field-row { display: grid; grid-template-columns: 5.5em minmax(0, 1fr); align-items: center; gap: 12px; color: var(--muted); font-weight: 400; }
 .settings-list > .field-row.stacked { grid-template-columns: minmax(0, 1fr); gap: 6px; }
 /* A collection dropdown reads like the text fields beside it, with an up-down chevron to say it opens a list. */
-.settings-list > .field-row select, .action-bar > select {
+.settings-list > .field-row select {
   color: var(--fg); text-align: left; text-align-last: left; appearance: none; -webkit-appearance: none;
   padding-right: 20px; background-image: var(--chevron); background-repeat: no-repeat; background-position: right center; background-size: 12px;
 }
@@ -354,14 +374,14 @@ main.detail > header {
 .row-add { background: #34c759; }
 .nav-action { --fill: transparent; gap: 6px; flex: none; min-height: 40px; padding: 0 8px; color: var(--fg); }
 /* Photo actions as one segmented toolbar. */
-.photo-tools { display: flex; border-radius: var(--group-radius); overflow: hidden; background: color-mix(in srgb, var(--fg) 7%, transparent); }
+.photo-tools { display: flex; border-radius: var(--group-radius); overflow: hidden; background: var(--group-fill); }
 .photo-tools > * {
   --fill: transparent; flex: 1; min-width: 0; min-height: 56px; padding: 8px 4px; border-radius: 0; font-size: 0.7rem; font-weight: 500; color: var(--fg);
   flex-direction: column; gap: 4px;
 }
-.photo-tools > * + * { border-left: 1px solid color-mix(in srgb, var(--fg) 10%, transparent); }
-.photo-tools > :active:not(:disabled) { transform: none; --fill: color-mix(in srgb, var(--fg) 10%, transparent); }
-.rapid-frame { position: relative; overflow: hidden; width: min(100cqw, 100cqh * var(--aspect, 1)); aspect-ratio: var(--aspect, 1); }
+.photo-tools > * + * { border-left: 1px solid var(--hairline); }
+.photo-tools > :active:not(:disabled) { transform: none; --fill: var(--hairline); }
+.rapid-frame { position: relative; overflow: hidden; width: min(100cqw, 100cqh * var(--aspect, 1)); aspect-ratio: var(--aspect, 1); container-type: size; }
 /* The frame is sized from the stream's shape, so the video fills it exactly and the guide lines up with the picture. */
 .rapid-video { display: block; width: 100%; height: 100%; object-fit: cover; background: #000; }
 /* Phone upright: the view fills the space edge to edge, as in the Camera app, cropping the stream's edges from view.
@@ -370,8 +390,7 @@ main.detail > header {
   .rapid-frame { width: 100%; height: 100%; aspect-ratio: auto; }
 }
 /* Business-card shape (~3.5 × 2 in) filling most of the frame: fill it and the photo keeps plenty of detail. Sized from
-   the frame both ways, so either shape fits whichever way the phone is held. */
-.rapid-frame { container-type: size; }
+   the frame both ways (container-type on .rapid-frame), so either shape fits whichever way the phone is held. */
 .rapid-guide {
   position: absolute; top: 50%; left: 50%; width: min(90cqw, 80cqh * 1.75); aspect-ratio: 1.75; transform: translate(-50%, -50%);
   border: 2px solid rgb(255 255 255 / 0.85); border-radius: 12px; box-shadow: 0 0 0 100vmax rgb(0 0 0 / 0.35); pointer-events: none;
@@ -463,8 +482,7 @@ main.detail > header {
 .list-header h1 { flex: 1; }
 .nav-action svg { flex: none; }
 .list-header .nav-action { min-height: 44px; padding: 0 16px; font-size: 0.95rem; }
-.list-header .nav-icon { width: 44px; padding: 0; }
-/* Phones: Collage and New show just their icons. */
+.list-header .nav-icon { position: relative; width: 44px; padding: 0; }
 .search-field {
   flex-direction: row; align-items: center; gap: 6px; padding: 0 14px; border-radius: 999px;
   background: color-mix(in srgb, var(--fg) 9%, transparent); color: var(--muted);
@@ -480,12 +498,14 @@ main.detail > header {
 .list-tools .segmented > button { min-height: 32px; padding: 4px 10px; }
 .search-field input { flex: 1; min-width: 0; min-height: 38px; padding: 0; border: 0; border-radius: 0; background: none; }
 .icon-button { width: 48px; height: 48px; padding: 0; font-size: 1.2rem; flex: none; }
+.back-chevron { display: block; width: 22px; height: 22px; margin: auto; fill: none; stroke: currentColor; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
 .group-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 12px; }
 .group-heading h2 { font-size: 1.3rem; }
+/* Right after the collection's name and count, so it reads as this collection's; Select all keeps the far edge. */
+.group-heading .pack-send { margin-inline-end: auto; gap: 5px; padding: 0 10px 0 8px; border: 0; background: color-mix(in srgb, var(--fg) 9%, transparent); font-weight: 500; }
+.beta-tag { padding: 0 5px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--fg) 25%, transparent); color: var(--muted); font-size: 0.65rem; font-weight: 600; line-height: 1.5; }
 .group-count { font-weight: 400; color: var(--muted); }
 .group-heading .nav-action { min-height: 32px; font-size: 0.9rem; }
-.action-bar > input, .action-bar > select { flex: 1; min-width: 0; min-height: 50px; padding: 8px 18px; background: var(--glass); border-color: var(--glass-edge); }
-.action-bar > select { padding-right: 44px; background-image: var(--chevron); background-repeat: no-repeat; background-size: 12px; background-position: right 20px center; }
 
 /* Rows view: a card's front and back (side by side, or stacked when landscape), its links underneath. Every card
    gets the same long side, and each row is only as wide as its cards. */
@@ -531,13 +551,16 @@ main.detail > header {
   /* As wide as the card grid (its 1200px less padding), so the camera button sits at the grid's edge, not over it. */
   .action-bar:has(> .tab-bar) { width: min(1168px, calc(100% - 24px)); }
 }
+/* Pictures marked not draggable: iOS otherwise lifts one into its own drag-and-drop after a long press (or offers to
+   save it), which fights the list's hold-to-reorder. */
+img[draggable=false] { -webkit-user-drag: none; -webkit-touch-callout: none; user-select: none; }
 /* Compact: each button is only as wide as the strip it shows; its card spills under the next one. */
 .card-fan {
   /* Strips wide enough that a full hand fills the width: the last card shows whole (taken as a typical 1.6:1 portrait
      card), the rest share what's left. */
   --fan-height: 170px; --item-width: calc(var(--fan-height) * 0.625);
-  /* No wider than a card, so a short hand doesn't leave gaps between its cards. */
-  --strip: min(var(--item-width), calc((100cqw - var(--item-width)) / (var(--cards-per-fan) - 1)));
+  /* A short hand spreads out, but never past each card showing 60% of itself: it still reads as a hand, overlapping. */
+  --strip: min(var(--item-width) * 0.6, calc((100cqw - var(--item-width)) / (var(--cards-per-fan) - 1)));
   /* Opening a card (pointed at, or lifted by a finger): the cards after it move aside by --reveal, and every card
      closes up by --squeeze per place along the row to make the room, so a full hand keeps its first and last card where
      they are and never grows past the edge. --reveal is set so the opened card shows whole: its own width
@@ -557,10 +580,13 @@ main.detail > header {
 /* Top-left aligned: a button centres its content, which would shift each card off its strip and push a turned card
    (laid out short) down. Positioned, so cards stack in row order: a turned card is transformed, and would otherwise
    paint over every unturned card after it. */
-.card-fan > button { position: relative; display: flex; align-items: flex-start; justify-content: flex-start; flex: none; width: var(--strip); min-height: 0; padding: 0; background: none; border-radius: 0; transition: translate 0.2s ease; }
+.card-fan > button { position: relative; display: flex; align-items: flex-start; justify-content: flex-start; flex: none; width: var(--strip); min-height: 0; padding: 0; background: none; border-radius: 0; transition: translate 0.2s ease;
+  /* Flipping between sides turns about the middle of the card (a typical portrait one), not of its narrow strip. */
+  transform-origin: calc(var(--item-width) / 2) 50%;
+}
 .card-fan > button:last-child { width: auto; }
 .card-fan .thumb { display: block; flex: none; height: var(--fan-height); width: auto; max-width: none; border-radius: 8px; box-shadow: -2px 0 10px rgb(0 0 0 / 0.35); }
-.card-fan div.thumb { aspect-ratio: 5 / 8; background: color-mix(in srgb, var(--fg) 10%, transparent); }
+.card-fan div.thumb { aspect-ratio: 5 / 8; background: var(--hairline); }
 .card-fan > .sticker .thumb { border-radius: 0; box-shadow: none; filter: drop-shadow(-2px 0 6px rgb(0 0 0 / 0.35)); }
 .card-fan > [aria-pressed=true] .thumb { outline: 3px solid var(--accent); outline-offset: -3px; }
 /* Turned upright: laid out as wide as the row is tall, then rotated about its top-left corner and moved back down. */
@@ -582,14 +608,13 @@ main.detail > header {
 .card-fan:has(> .focused) > .focused ~ button { translate: calc(var(--reveal) - var(--i) * var(--squeeze)) 0; }
 /* Dragged to reorder: above the rest, and out of the way of finding the card under the pointer. */
 .card-fan > .dragging { z-index: 5; pointer-events: none; cursor: grabbing; }
-/* Flipping between sides, about the middle of the card (a typical portrait one) rather than of its narrow strip. */
-.card-fan > button { transform-origin: calc(var(--item-width) / 2) 50%; }
 .card-fan > .flip-out { animation: fan-flip-out 0.15s ease-in forwards; }
 .card-fan > .flip-in { animation: fan-flip-in 0.15s ease-out; }
 @keyframes fan-flip-out { to { transform: perspective(600px) rotateY(90deg); } }
 @keyframes fan-flip-in { from { transform: perspective(600px) rotateY(-90deg); } }
 @media (prefers-reduced-motion: reduce) { .card-fan > .flip-out, .card-fan > .flip-in { animation-duration: 1ms; } }
 @media (max-width: 719px) { .card-fan { --fan-height: 130px; } }
+@media (min-width: 1024px) { .card-fan { --fan-height: 220px; } }
 .list-tools .list-layout { width: 40px; height: 40px; }
 /* The links never widen the row; a long one is cut short to the cards' width. */
 .card-row-info { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-width: 0; contain: inline-size; }
@@ -612,7 +637,7 @@ main.detail > header {
 /* Collage picker: a tile per choice, with a few of its cards fanned like a hand. */
 .collage-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
 .collage-tile {
-  --fill: color-mix(in srgb, var(--fg) 7%, transparent); flex-direction: column; justify-content: flex-end; gap: 10px;
+  --fill: var(--group-fill); flex-direction: column; justify-content: flex-end; gap: 10px;
   min-height: 0; padding: 16px 12px 14px; border-radius: 22px; overflow: hidden;
 }
 .tile-stack { position: relative; display: block; width: 100%; height: 112px; }
@@ -622,7 +647,7 @@ main.detail > header {
 }
 .tile-card .thumb { display: block; height: 96px; width: auto; max-width: 120px; object-fit: contain; border-radius: 6px; box-shadow: 0 4px 12px rgb(0 0 0 / 0.35); }
 .tile-card.sticker .thumb { border-radius: 0; box-shadow: none; filter: drop-shadow(0 3px 6px rgb(0 0 0 / 0.35)); }
-.tile-card div.thumb { width: 60px; background: color-mix(in srgb, var(--fg) 10%, transparent); }
+.tile-card div.thumb { width: 60px; background: var(--hairline); }
 .tile-card:nth-last-child(3) { rotate: -12deg; translate: calc(-50% - 22px) 0; }
 .tile-card:nth-last-child(2) { rotate: 10deg; translate: calc(-50% + 22px) 0; }
 .collage-tile:hover .tile-card:nth-last-child(3) { rotate: -18deg; translate: calc(-50% - 30px) 0; }
@@ -634,7 +659,6 @@ dialog.alert {
   margin: auto; width: min(300px, calc(100% - 48px)); border: 0; border-radius: 24px; padding: 20px 16px 16px;
   background: var(--card); color: var(--fg); text-align: center; box-shadow: 0 20px 60px rgb(0 0 0 / 0.35);
 }
-dialog.alert::backdrop { background: rgb(0 0 0 / 0.45); }
 dialog.alert h2 { margin: 0 0 6px; font-size: 1.05rem; }
 dialog.alert p { margin: 0 0 14px; font-size: 0.9rem; }
 .alert-buttons { display: flex; gap: 8px; }
@@ -671,8 +695,7 @@ dialog.pack-opening {
 dialog.pack-opening::backdrop { background: #0b0d14; }
 .pack-skip { --fill: transparent; position: absolute; top: calc(12px + env(safe-area-inset-top)); right: 16px; z-index: 3; color: rgb(255 255 255 / 0.7); }
 /* --stack: the card stack's square box. The pack is sized from it, so an upright card fits inside the pack. */
-.pack-stage { --stack: min(340px, 88vw); --pack-height: calc(var(--stack) * 1.24); position: relative; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 28px; }
-.pack-stage { touch-action: none; }
+.pack-stage { --stack: min(340px, 88vw); --pack-height: calc(var(--stack) * 1.24); touch-action: none; perspective: 1000px; position: relative; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 28px; }
 /* Pinned to the bottom, clear of the biggest card. */
 .pack-hint { position: absolute; left: 16px; right: 16px; bottom: calc(40px + env(safe-area-inset-bottom)); text-align: center; margin: 0; min-height: 1.5em; color: rgb(255 255 255 / 0.7); font-size: 0.9rem; }
 
@@ -745,7 +768,6 @@ dialog.pack-opening::backdrop { background: #0b0d14; }
 
 /* The cards, stacked where the pack was: they rise out of it once it's torn. The stack tilts in 3D (--tilt-x/-y, set
    from the finger), eased back to rest except while being dragged. */
-.pack-stage { perspective: 1000px; }
 .pack-cards {
   position: absolute; z-index: 1; width: var(--stack); aspect-ratio: 1; top: 50%; left: 50%; translate: -50% -50%;
   transform-style: preserve-3d; transform: rotateX(var(--tilt-x, 0deg)) rotateY(var(--tilt-y, 0deg));
@@ -763,13 +785,13 @@ dialog.pack-opening::backdrop { background: #0b0d14; }
 .pack-card {
   position: absolute; inset: 0; transform-style: preserve-3d;
   translate: 0 0 calc(var(--depth) * -9px);
-  transition: translate 0.32s ease-in, rotate 0.45s ease-in-out, opacity 0.32s;
+  transition: translate 0.32s ease-in, rotate 0.25s ease-in-out, opacity 0.32s;
 }
 /* Centred by absolute position and auto margins rather than grid: iOS sized a grid-centred image's max-width against
    less than the box, so landscape cards came out smaller than portrait ones. */
-.pack-card img { position: absolute; inset: 0; margin: auto; max-width: calc(var(--size) * 100%); max-height: calc(var(--size) * 100%); border-radius: 12px; box-shadow: 0 2px 6px rgb(0 0 0 / 0.35); }
-/* Not draggable or long-pressable: the browser's own image drag cancelled the stack's tilt after one move. */
-.pack-card img { pointer-events: none; -webkit-user-drag: none; -webkit-touch-callout: none; user-select: none; }
+.pack-card img { position: absolute; inset: 0; margin: auto; max-width: calc(var(--size) * 100%); max-height: calc(var(--size) * 100%); border-radius: 12px; box-shadow: 0 2px 6px rgb(0 0 0 / 0.35);
+  /* Not draggable or long-pressable: the browser's own image drag cancelled the stack's tilt after one move. */
+  pointer-events: none; -webkit-user-drag: none; -webkit-touch-callout: none; user-select: none; }
 .pack-card:first-child img { box-shadow: 0 20px 40px rgb(0 0 0 / 0.5); }
 .pack-card.sticker img { border-radius: 0; box-shadow: none; filter: drop-shadow(0 4px 8px rgb(0 0 0 / 0.4)); }
 .pack-card.upright { rotate: -90deg; }

@@ -24,6 +24,9 @@ export function t(text, values) {
   return values ? template.replace(/\{(\w+)\}/g, (_, name) => values[name]) : template
 }
 
+// t with the singular or plural text; {count} is filled in either way.
+export const tn = (count, one, many) => (count === 1 ? t(one, { count }) : t(many, { count }))
+
 // A reload re-renders every string; the switches live in the Settings drawer and the empty list, where nothing is
 // mid-edit.
 export function setLanguage(next) {

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { shareFile, extensionOf } from './backup.js'
-import { useObjectUrl } from './ui.jsx'
+import { useObjectUrl, ShareIcon, notify } from './ui.jsx'
 import { t } from './i18n.js'
 import { loadOpenCv, detectCorners, warpCard, adjustCard, measureCorners, canvasToWebp, DEFAULT_ADJUSTMENT, orderCorners, outputSize, defaultStickerArea, cutStickerCanvas } from './crop.js'
 
@@ -24,7 +24,6 @@ const icon = (children, size = 22) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{children}</svg>
 )
 const CHECK = icon(<path d="m5 12.5 4.5 4.5L19 7.5" />, 24)
-const SHARE = icon(<><path d="M12 3v12" /><path d="m7.5 7.5 4.5-4.5 4.5 4.5" /><path d="M8 11H6a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2h-2" /></>)
 const BACK = icon(<path d="m15 5-7 7 7 7" />)
 const BRUSH = icon(<><path d="M18.5 3.5a2.1 2.1 0 0 1 3 3L11 17l-4-4Z" /><path d="M7 13c-2 0-3.5 1.5-3.5 3.5 0 1.5-.5 2.5-1.5 3.5 3 1 7 0 8.5-1.5L7 13Z" /></>)
 const UNDO = icon(<><path d="M9 14 4 9l5-5" /><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" /></>)
@@ -151,7 +150,8 @@ export function CornerEditor({ original: blob, edit, onDone, onCancel, sticker =
 
   // Adjust step: the warped crop (or sticker cut-out) is rendered once, then rotation/enhance re-render a preview from it.
   const [warped, setWarped] = useState(null)
-  const [useCorners, setUseCorners] = useState(true)
+  // The mode buttons aren't there during the adjust step, so this is as it was when the crop was warped.
+  const useCorners = finishMode !== 'whole'
   // The area a sticker was cut out of, while the adjust step shows that cut-out; null for a straight crop.
   const [cutArea, setCutArea] = useState(null)
   // Stickers saved before they had rotate/enhance only stored their area.
@@ -160,13 +160,12 @@ export function CornerEditor({ original: blob, edit, onDone, onCancel, sticker =
   const previewUrl = useObjectUrl(preview)
   const render = (canvas = adjustCard(warped, adjustment)) => canvasToWebp(canvas, { transparent: !!cutArea })
 
-  function toAdjust(withCorners) {
+  function toAdjust() {
     try {
       setCutArea(null)
-      setUseCorners(withCorners)
-      setWarped(warpCard(openCvRef.current, source, withCorners ? orderCorners(corners) : null))
+      setWarped(warpCard(openCvRef.current, source, useCorners ? orderCorners(corners) : null))
     } catch (error) {
-      alert(t('Could not crop image: {message}', { message: error.message }))
+      notify(t('Could not crop image: {message}', { message: error.message }))
     }
   }
 
@@ -228,11 +227,11 @@ export function CornerEditor({ original: blob, edit, onDone, onCancel, sticker =
       const area = cornersArea(corners)
       // The preview's fewer GrabCut rounds came out the same as the full five on test photos, so it's kept rather than redone.
       const cut = cutPreview?.key === cutKey() ? cutPreview.cut : await cutStickerCanvas(openCvRef.current, blob, area, removed)
-      if (!cut) return alert(t('No outline found. Try a tighter area, or crop as a rectangle.'))
+      if (!cut) return notify(t('No outline found. Try a tighter area, or crop as a rectangle.'))
       setCutArea(area)
       setWarped(cut.canvas)
     } catch (error) {
-      alert(t('Could not cut out: {message}', { message: error.message }))
+      notify(t('Could not cut out: {message}', { message: error.message }))
     } finally {
       setCutting(false)
     }
@@ -245,7 +244,7 @@ export function CornerEditor({ original: blob, edit, onDone, onCancel, sticker =
   const strokePath = ({ points }) => points.map(({ x, y }, i) => `${i ? 'L' : 'M'}${x * scale} ${y * scale}`).join('')
   const shownCut = settledPreview?.cut
   const ready = finishMode === 'whole' ? !!source : !!corners && !cutting
-  const apply = () => (finishMode === 'cut' ? cutOut() : toAdjust(finishMode !== 'whole'))
+  const apply = () => (finishMode === 'cut' ? cutOut() : toAdjust())
   const width = source ? source.width * scale : 0
   const height = source ? source.height * scale : 0
   const screen = corners && corners.map(({ x, y }) => ({ x: x * scale, y: y * scale }))
@@ -264,7 +263,7 @@ export function CornerEditor({ original: blob, edit, onDone, onCancel, sticker =
           <button
             type="button" class="icon-button" aria-label={t('Save original')}
             onClick={() => shareFile(new File([blob], `cardbox-original-${Date.now()}.${extensionOf(blob)}`, { type: blob.type }))}
-          >{SHARE}</button>
+          ><ShareIcon /></button>
           <button type="button" class="icon-button editor-done" aria-label={t('Done')} disabled={!ready} onClick={apply}>{CHECK}</button>
         </div>
       </div>

@@ -1,4 +1,5 @@
-import { IMAGE_FIELDS, listCards, getCard, cardTime, storeCard } from './db.js'
+import { IMAGE_FIELDS, listCards, listDeleted, getCard, cardTime, storeCard } from './db.js'
+import { shuffle } from './collage.js'
 
 // Peer IDs on the public PeerJS relay are global, so ours carry a prefix. The relay only passes connection details
 // between the two devices; cards travel directly between them (or through our TURN relay, encrypted, when a direct
@@ -8,13 +9,26 @@ const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
 const CODE_LENGTH = 6
 // Bumped whenever the exchange or merge rules change, so two devices on different versions refuse to sync rather
 // than each following different rules.
-const PROTOCOL_VERSION = 7
+const PROTOCOL_VERSION = 8
 // Cards requested at once: enough to keep the connection busy between round trips, few enough to bound memory.
 const CARDS_IN_FLIGHT = 4
 // From a device connecting until both have proved the pairing. Without it, a connection that never opens (no direct
 // path and the TURN relay unreachable) or a device that never answers (an old version) leaves both on Connecting.
 const CONNECT_TIMEOUT_MS = 20000
 const RELAY_TIMEOUT_MS = 5000
+// A host still waiting that loses the pairing server (iOS cuts it while the browser is in the background, e.g. to paste
+// the link elsewhere) signs in again under the same code once it's back in view, so the link keeps working. The server
+// may hold the old sign-in a little while: retry this often, this many times.
+export const RELAY_ERRORS = ['network', 'server-error', 'socket-error', 'socket-closed', 'disconnected']
+const RELISTEN_ERRORS = [...RELAY_ERRORS, 'unavailable-id']
+const RELISTEN_DELAY_MS = 2000
+// Enough to outlast the server holding a sign-in after the page was cleared from memory without signing out.
+const RELISTEN_TRIES = 30
+const whenVisible = () => new Promise((resolve) => {
+  if (document.visibilityState === 'visible') return resolve()
+  const seen = () => { if (document.visibilityState === 'visible') { document.removeEventListener('visibilitychange', seen); resolve() } }
+  document.addEventListener('visibilitychange', seen)
+})
 
 const newSyncCode = () =>
   Array.from(crypto.getRandomValues(new Uint8Array(CODE_LENGTH)), (byte) => CODE_ALPHABET[byte % CODE_ALPHABET.length]).join('')
@@ -24,6 +38,21 @@ export const newPairing = () => ({
   code: newSyncCode(),
   secret: btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16)))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''),
 })
+// The QR link on screen while waiting: { kind: 'send' | 'sync', pairing, ids?, pack? }. Kept so that if iOS clears the
+// page from memory while the user is in another app (sharing the link, say), it reopens showing the same link.
+const SHOWN_KEY = 'shownPairing'
+// Past this, reopening the app shouldn't land on an old QR screen.
+const SHOWN_MAX_MS = 60 * 60 * 1000
+export const rememberShown = (shown) => localStorage.setItem(SHOWN_KEY, JSON.stringify({ ...shown, at: Date.now() }))
+export const forgetShown = () => localStorage.removeItem(SHOWN_KEY)
+export function shownPairing() {
+  try {
+    const shown = JSON.parse(localStorage.getItem(SHOWN_KEY))
+    return shown && Date.now() - shown.at < SHOWN_MAX_MS ? shown : null
+  } catch {
+    return null
+  }
+}
 const linkTo = (kind, { code, secret }) => `${location.origin}${location.pathname}#${kind}/${code}.${secret}`
 export const syncLink = (pairing) => linkTo('sync', pairing)
 // For handing over one card: opens the other phone's Receive screen, which only takes, never shares.
@@ -53,17 +82,23 @@ export const contentOf = (card) => JSON.stringify([
   card.frontEdit ?? null, card.backEdit ?? null, IMAGE_FIELDS.map((field) => card[field]?.size ?? 0),
 ])
 
-// Which of the other device's cards this device should fetch: those missing here or edited more recently there.
-// Sync never deletes, so a card deleted on one device comes back from the other. Copies with the same time but
-// different content (cards edited before edit times were recorded) are fetched both ways and merged with mergeTied.
-// Each side is { [id]: { time, content } } with ISO times.
-export function planSync(local, remote) {
+// Which of the other device's cards this device should fetch: those missing here or edited more recently there, but
+// not those deleted here since they were last edited. Copies with the same time but different content (cards edited
+// before edit times were recorded) are fetched both ways and merged with mergeTied.
+// Each side is { [id]: { time, content } } with ISO times; deleted: { [id]: time } for the cards deleted here.
+export function planSync(local, remote, deleted = {}) {
   return Object.keys(remote).filter((id) => {
     const theirs = remote[id]
     const ours = local[id]
-    return !ours || theirs.time > ours.time || (theirs.time === ours.time && theirs.content !== ours.content)
+    if (!ours) return !(deleted[id] >= theirs.time)
+    return theirs.time > ours.time || (theirs.time === ours.time && theirs.content !== ours.content)
   })
 }
+
+// The cards here that the other device deleted after they were last edited. Sync never deletes them itself: they're
+// listed for the user to confirm (see SyncScreen). An edit after the delete wins, and the card goes back instead.
+// theirDeleted: the other device's { [id]: time } of deletes.
+export const planDeletes = (local, theirDeleted) => Object.keys(theirDeleted).filter((id) => local[id] && theirDeleted[id] > local[id].time)
 
 // Combines two copies of a card with the same edit time, so neither loses anything: all socials and collections, and
 // for each text field the filled-in (or longer) value. Gives the same result whichever copy is `a`, so both devices agree.
@@ -111,15 +146,27 @@ function unpackCard(packed, ours) {
   return card
 }
 
-// Both devices run the same exchange: send their cards' edit times, pull the cards they need a few at a time, then
-// say done. Resolves when both are done with { received, sent, ids } (ids: the cards received).
+// A pack's cards: PACK_SIZE ids at random, each at most once while there are enough; a smaller collection gives every
+// card, then repeats random ones to fill the pack.
+export const PACK_SIZE = 8
+export function packIds(ids, random = Math.random) {
+  const pick = () => ids[Math.floor(random() * ids.length)]
+  const shuffled = shuffle([...ids], random)
+  return [...shuffled.slice(0, PACK_SIZE), ...Array.from({ length: Math.max(0, PACK_SIZE - ids.length) }, pick)]
+}
+
+// Both devices run the same exchange: send their cards' edit times and deletes, pull the cards they need a few at a
+// time, then say done. Resolves when both are done with { received, sent, ids, deleted, pack } (ids: the cards received;
+// deleted: the cards here the other device deleted, still to confirm; pack: the other device's, as below).
+// pack, sending one: { name, ids } (ids in pack order, repeats and all), passed on for the receiver to open; offer
+// should be its ids.
 // offer limits which cards this side lists and hands over (null = all); fetch false takes nothing. Handing one card to
 // someone is offer [id] + fetch false on the sender, offer [] on the receiver, so neither learns the other's other cards.
 // It opens with each side proving it holds the pairing secret (see pairingProof); nothing else is sent until the other
 // side's proof checks out.
-function exchange(connection, onProgress, { role, secret, onVerified, offer = null, fetch = true }) {
+function exchange(connection, onProgress, { role, secret, onVerified, offer = null, fetch = true, pack = null }) {
   return new Promise((resolve, reject) => {
-    const counts = { received: 0, sent: 0, ids: [] }
+    const counts = { received: 0, sent: 0, ids: [], deleted: [], pack: null }
     let queue = null
     let total = 0
     let inFlight = 0
@@ -147,20 +194,21 @@ function exchange(connection, onProgress, { role, secret, onVerified, offer = nu
       if (!verified) {
         const expected = await pairingProof(secret, role === 'host' ? 'guest' : 'host', theirs, ours)
         if (!ours || !theirs || message.type !== 'proof' || message.proof !== expected) {
-          const error = new Error('pairing failed')
-          error.type = 'pairing-failed'
-          throw error
+          throw Object.assign(new Error('pairing failed'), { type: 'pairing-failed' })
         }
         verified = true
         onVerified()
-        await localCards(offer).then((cards) => send({ type: 'state', cards, version: PROTOCOL_VERSION }))
+        // Deletes only travel in a full sync, not when handing over one card.
+        send({ type: 'state', cards: await localCards(offer), deleted: offer ? {} : await listDeleted(), pack, version: PROTOCOL_VERSION })
       } else if (message.type === 'state') {
         if (message.version !== PROTOCOL_VERSION) {
-          const error = new Error('version mismatch')
-          error.type = 'version-mismatch'
-          throw error
+          throw Object.assign(new Error('version mismatch'), { type: 'version-mismatch' })
         }
-        const wanted = fetch ? planSync(await localCards(), message.cards) : []
+        const here = await localCards()
+        // A card handed over (offer set here too) is taken even if it was deleted here: only a full sync keeps it gone.
+        const wanted = fetch ? planSync(here, message.cards, offer ? {} : await listDeleted()) : []
+        if (fetch) counts.deleted = planDeletes(here, message.deleted ?? {})
+        if (fetch) counts.pack = message.pack ?? null
         queue = wanted
         total = wanted.length
         await requestMore()
@@ -210,34 +258,50 @@ async function relayServers() {
 // Starts a sync session. As host it waits for the other device to connect with the pairing's code; as guest it
 // connects to it.
 // Returns { done: Promise<counts>, close() }. Errors carry PeerJS's `type` (e.g. 'peer-unavailable', 'network').
-// offer / fetch: see exchange.
-export async function startSync({ role, pairing: { code, secret }, onStatus, onProgress, offer, fetch }) {
+// offer / fetch / pack: see exchange. resume: hosting again under a remembered code, which the server may still hold.
+export async function startSync({ role, pairing: { code, secret }, onStatus = () => {}, onProgress = () => {}, offer, fetch, pack, resume = false }) {
   const [{ Peer }, iceServers] = await Promise.all([import('peerjs'), relayServers()])
   const options = iceServers ? { config: { iceServers } } : {}
-  const peer = role === 'host' ? new Peer(PEER_PREFIX + code, options) : new Peer(options)
+  let peer
+  let closed = false
   const done = new Promise((resolve, reject) => {
-    peer.on('error', reject)
+    let connected = false
     const run = (connection) => {
+      connected = true
       onStatus('syncing')
-      const timer = setTimeout(() => {
-        const error = new Error('timed out')
-        error.type = 'timeout'
-        reject(error)
-      }, CONNECT_TIMEOUT_MS)
+      const timer = setTimeout(() => reject(Object.assign(new Error('timed out'), { type: 'timeout' })), CONNECT_TIMEOUT_MS)
       const onVerified = () => clearTimeout(timer)
-      const begin = () => exchange(connection, onProgress, { role, secret, onVerified, offer, fetch }).then(resolve, reject)
+      const begin = () => exchange(connection, onProgress, { role, secret, onVerified, offer, fetch, pack }).then(resolve, reject)
       if (connection.open) begin()
       else connection.on('open', begin)
     }
-    if (role === 'host') {
+    const listen = (tries) => {
+      peer = new Peer(PEER_PREFIX + code, options)
+      let lostAlready = false
       peer.on('open', () => onStatus('waiting'))
       // Only the first device to connect syncs; the code is single-use.
       peer.once('connection', run)
-    } else {
+      peer.on('error', async (error) => {
+        // One loss can raise several errors.
+        if (lostAlready) return
+        // On the first try, 'unavailable-id' is someone else's code: the caller picks another.
+        const lost = RELISTEN_ERRORS.includes(error.type) && (tries > 0 || error.type !== 'unavailable-id')
+        if (connected || closed || !lost || tries >= RELISTEN_TRIES) return reject(error)
+        lostAlready = true
+        const lostPeer = peer
+        setTimeout(() => lostPeer.destroy())
+        await whenVisible()
+        setTimeout(() => closed || listen(tries + 1), tries ? RELISTEN_DELAY_MS : 0)
+      })
+    }
+    if (role === 'host') listen(resume ? 1 : 0)
+    else {
+      peer = new Peer(options)
+      peer.on('error', reject)
       peer.on('open', () => run(peer.connect(PEER_PREFIX + code, { reliable: true })))
     }
   })
   // Leave time for the last message to flush before tearing down.
   done.finally(() => setTimeout(() => peer.destroy(), 1000)).catch(() => {})
-  return { done, close: () => peer.destroy() }
+  return { done, close: () => { closed = true; peer.destroy() } }
 }

@@ -1,24 +1,24 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks'
-import { t, language, setLanguage, LANGUAGES } from './i18n.js'
+import { t, tn, language, setLanguage, LANGUAGES } from './i18n.js'
 import {
-  canStorePhotos, getCard,
+  canStorePhotos, getCards,
   listCards, saveCard, saveCards, deleteCard, deleteAllCards, getLastBackup, compareInGroup, sideOf, sideFields,
   convertPhotosToWebp, measureOldCorners, IMAGE_FIELDS, thumbnailFor,
 } from './db.js'
 import { exportBackup, importBackup, shareFile } from './backup.js'
-import { LanguageSwitch, Logo } from './ui.jsx'
 import { setUnsavedWork } from './update.js'
 import { PackOpening } from './pack.jsx'
 import { CornerEditor } from './cropper.jsx'
 import { loadOpenCv, cutOutSticker } from './crop.js'
-import { ArmedButton, BackHeader, Beta, CardImage, CollectionChips, NewCollectionInput, cornerStyle, usePinchZoom } from './ui.jsx'
+import { ArmedButton, BackHeader, Beta, CardImage, CollectionChips, LanguageSwitch, Logo, NewCollectionInput, ShareIcon, ask, cardCornerStyle, toggled, useModal, usePinchZoom, useStoredState } from './ui.jsx'
 import { Card3D } from './card3d.jsx'
 import { RapidCapture, Camera } from './rapid.jsx'
-import { BeamSend, BeamReceive } from './beam.jsx'
+import { BeamSend, BeamReceive, PackSend, ResumedSend } from './beam.jsx'
 import { Tutorial, tutorialSeen } from './tutorial.jsx'
 import { describeSocial } from './social.js'
-import { loadThumbnails, collageItems, drawCards, warpLayer, composeCollage, DEFAULT_FILL, DEFAULT_STICKER_SIZE, DEFAULT_TILT, DEFAULT_OVERLAP, MAX_TILT_LIMIT, MAX_OVERLAP_LIMIT, DEFAULT_TIDY_GAP, MAX_TIDY_GAP } from './collage.js'
+import { loadThumbnails, collageItems, repeatItems, seededRandom, drawCards, warpLayer, composeCollage, DEFAULT_FILL, DEFAULT_STICKER_SIZE, DEFAULT_TILT, DEFAULT_OVERLAP, MAX_TILT_LIMIT, MAX_OVERLAP_LIMIT, DEFAULT_TIDY_GAP, MAX_TIDY_GAP } from './collage.js'
 import { SyncScreen } from './sync.jsx'
+import { shownPairing } from './sync.js'
 import { useReorder } from './reorder.js'
 
 const searchText = (card) => [card.name, ...card.collections, card.note, ...(card.socials || [])].join(' ').toLowerCase()
@@ -184,12 +184,14 @@ function FanCard({ card, index, order, side, focused, pressed, dragging, dragHan
 
 function Thumbnail({ card, side, onLoad }) {
   const [blob, setBlob] = useState(null)
+  const photo = card[side]
+  // A reload of the list gives every photo a new Blob; thumbnailFor itself goes by id, side, size and type.
   useEffect(() => {
     let current = true
-    thumbnailFor(card.id, side, card[side], card.kind === 'sticker').then((made) => current && setBlob(made))
+    thumbnailFor(card.id, side, photo, card.kind === 'sticker').then((made) => current && setBlob(made))
     return () => { current = false }
-  }, [card[side]])
-  return <CardImage blob={blob} className="thumb" style={card.kind === 'sticker' ? undefined : cornerStyle(card[`${side}Edit`])} onLoad={onLoad} lazy />
+  }, [card.id, side, photo.size, photo.type])
+  return <CardImage blob={blob} className="thumb" style={cardCornerStyle(card, side)} onLoad={onLoad} lazy />
 }
 
 function daysSince(isoString) {
@@ -218,12 +220,18 @@ const GLYPHS = {
   swap: 'M4 7h16M16 3l4 4-4 4M20 17H4M8 13l-4 4 4 4',
   plus: 'M12 5v14M5 12h14',
   qr: 'M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h2v2h-2zM18 18h2v2h-2zM18 14h2M14 18h2',
+  sync: 'M21 12a9 9 0 0 1-15.5 6.2M3 12a9 9 0 0 1 15.5-6.2M19 2v4h-4M5 22v-4h4',
+  cards: 'M5 8h10a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2zM8 4h11a2 2 0 0 1 2 2v10',
+  help: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM9.1 9a3 3 0 0 1 5.8 1c0 2-2.9 2.6-2.9 4M12 17.5h.01',
+  language: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20',
+  storage: 'M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zM4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3',
+  beta: 'M9 3h6M10 3v6L4.5 19a1.5 1.5 0 0 0 1.3 2h12.4a1.5 1.5 0 0 0 1.3-2L14 9V3M7.5 15h9',
+  reset: 'M3 12a9 9 0 1 0 2.6-6.4L3 8.2M3 3v5.2h5.2',
 }
 const Glyph = ({ name }) => (
   <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={GLYPHS[name]} /></svg>
 )
 
-// A box with two cards peeking out; stands in for the "Cardbox" title.
 // Days since the last backup or sync (Infinity if never) once a reminder is due, else null.
 function overdueDays(cardCount, lastBackup) {
   if (cardCount < BACKUP_MIN_CARDS) return null
@@ -235,6 +243,17 @@ function overdueDays(cardCount, lastBackup) {
 const newSeed = () => Math.floor(Math.random() * 1e6)
 
 const ENCODE_DELAY_MS = 300
+const CENTRED = { x: 0, y: 0 }
+// How far the cards can be dragged off centre over a photo, as a share of the frame: about half of them stays in.
+const MAX_OFFSET = 0.5
+// Send pack (Beta): off unless turned on in Settings.
+const PACKS_KEY = 'packSharing'
+const packsEnabled = () => localStorage.getItem(PACKS_KEY) === '1'
+// Collage's Card count slider (Beta), likewise.
+const CARD_COUNT_KEY = 'collageCardCount'
+const cardCountEnabled = () => localStorage.getItem(CARD_COUNT_KEY) === '1'
+// Past this a collage takes a while to lay out and the cards are too small to see.
+const MAX_CARD_COUNT = 200
 // A gentle table-top view to start from: nearer edge wider than the far one.
 const DEFAULT_SURFACE = [{ x: 0.2, y: 0.3 }, { x: 0.8, y: 0.3 }, { x: 0.95, y: 0.9 }, { x: 0.05, y: 0.9 }]
 
@@ -244,30 +263,37 @@ function GroupPhoto({ cards, onClose }) {
   // picked: nothing is loaded before then, as laying out every card can take a while.
   const [choice, setChoice] = useState(null)
   const event = choice?.startsWith('event:') ? choice.slice('event:'.length) : ''
-  const stickerCount = cards.filter((card) => card.kind === 'sticker').length
   // [value, label, cards]: the cards give the picker's tiles their pictures.
-  const choices = [
-    ['kind:all', t('Everything ({count})', { count: cards.length }), cards],
-    ...(stickerCount > 0 ? [
-      ['kind:cards', t('All cards ({count})', { count: cards.length - stickerCount }), cards.filter((card) => card.kind !== 'sticker')],
-      ['kind:stickers', t('All stickers ({count})', { count: stickerCount }), cards.filter((card) => card.kind === 'sticker')],
-    ] : []),
-    ...collections(cards).filter(([name]) => name).map(([name, group]) => [`event:${name}`, `${name} (${group.length})`, group]),
-  ]
+  const choices = useMemo(() => {
+    const stickerCount = cards.filter((card) => card.kind === 'sticker').length
+    return [
+      ['kind:all', t('Everything ({count})', { count: cards.length }), cards],
+      ...(stickerCount > 0 ? [
+        ['kind:cards', t('All cards ({count})', { count: cards.length - stickerCount }), cards.filter((card) => card.kind !== 'sticker')],
+        ['kind:stickers', t('All stickers ({count})', { count: stickerCount }), cards.filter((card) => card.kind === 'sticker')],
+      ] : []),
+      ...collections(cards).filter(([name]) => name).map(([name, group]) => [`event:${name}`, `${name} (${group.length})`, group]),
+    ]
+  }, [cards])
   const [sides, setSides] = useState('front')
-  const [aspect, setAspect] = useState(() => localStorage.getItem('collageAspect') || '1')
-  const [tilt, setTilt] = useState(() => Number(localStorage.getItem('collageTilt') ?? DEFAULT_TILT))
-  const [overlap, setOverlap] = useState(() => Number(localStorage.getItem('collageOverlap') ?? DEFAULT_OVERLAP))
-  const [tidy, setTidy] = useState(() => localStorage.getItem('collageStyle') === 'tidy')
-  const [gap, setGap] = useState(() => Number(localStorage.getItem('collageGap') ?? DEFAULT_TIDY_GAP))
-  const [scale, setScale] = useState(() => Number(localStorage.getItem('collageScale') ?? 1))
+  const [aspect, setAspect] = useStoredState('collageAspect', (stored) => stored || '1')
+  const [tilt, setTilt] = useStoredState('collageTilt', (stored) => Number(stored ?? DEFAULT_TILT))
+  const [overlap, setOverlap] = useStoredState('collageOverlap', (stored) => Number(stored ?? DEFAULT_OVERLAP))
+  const [style, setStyle] = useStoredState('collageStyle', (stored) => (stored === 'tidy' ? 'tidy' : 'pile'))
+  const tidy = style === 'tidy'
+  const [gap, setGap] = useStoredState('collageGap', (stored) => Number(stored ?? DEFAULT_TIDY_GAP))
+  const [scale, setScale] = useStoredState('collageScale', (stored) => Number(stored ?? 1))
+  // How many cards the collage holds: the chosen ones repeated evenly up to this, or null for each once.
+  const [count, setCount] = useState(null)
+  // The slider's number while it's dragged; the collage is only laid out again on release, as 200 cards take a moment.
+  const [countShown, setCountShown] = useState(null)
   const [seed, setSeed] = useState(newSeed)
   const [adjusting, setAdjusting] = useState(false)
-  // A photo (ImageBitmap) behind the cards, or null for the plain dark one.
   // 'colour' (a plain one, picked in the menu), 'transparent', or a photo (ImageBitmap).
   const [backdrop, setBackdrop] = useState('colour')
   const background = typeof backdrop === 'object' ? backdrop : null
-  const [colour, setColour] = useState(() => localStorage.getItem('collageColour') || DEFAULT_FILL)
+  useEffect(() => () => background?.close(), [background])
+  const [colour, setColour] = useStoredState('collageColour', (stored) => stored || DEFAULT_FILL)
   const transparent = backdrop === 'transparent'
   function plainBackdrop(kind) {
     setBackdrop(kind)
@@ -281,6 +307,7 @@ function GroupPhoto({ cards, onClose }) {
     if (!file) return
     setBackdrop(await createImageBitmap(file))
     setSurface(null)
+    setOffset(CENTRED)
   }
   // Where the cards lie on the photo: four corners as shares of the image (see warpLayer), or null for flat.
   // corners: the same while dragging them, null when not adjusting.
@@ -326,10 +353,13 @@ function GroupPhoto({ cards, onClose }) {
   const [image, setImage] = useState(null)
   const canvasRef = useRef()
   const zoomProps = usePinchZoom()
-  const chosen = !choice ? []
+  const chosen = useMemo(() => (!choice ? []
     : event ? cards.filter((card) => card.collections.includes(event))
     : choice === 'kind:all' ? cards
-    : cards.filter((card) => (card.kind === 'sticker') === (choice === 'kind:stickers'))
+    : cards.filter((card) => (card.kind === 'sticker') === (choice === 'kind:stickers'))), [cards, choice])
+  // The pictures in the collage before any repeats: more than the cards when backs go apart.
+  const pieces = thumbnails?.length ?? chosen.length
+  const shownCount = Math.max(countShown ?? count ?? 0, pieces)
 
   useEffect(() => {
     if (!choice) return
@@ -347,25 +377,55 @@ function GroupPhoto({ cards, onClose }) {
       if (sides === 'back') {
         items = items.map((item, i) => (backOf.has(chosen[i]) ? { ...item, members: collageItems([{ front: backOf.get(chosen[i]), back: null, frontRadius: chosen[i].backEdit?.radius }])[0].members } : item))
       }
+      // Apart: each back is a card of its own, placed wherever the layout puts it rather than beside its front.
+      if (sides === 'apart') items = [...items, ...collageItems(backed.map((card) => ({ front: backOf.get(card), frontRadius: card.backEdit?.radius })))]
       if (!cancelled) setThumbnails(items)
     })()
     return () => { cancelled = true }
   }, [choice, sides])
 
   // Each layer is redone only when its own settings change, so dragging the colour picker just repaints the background.
-  const cardLayer = useMemo(() => thumbnails && drawCards(thumbnails, seed, Number(aspect), { tilt, overlap, tidy, gap, scale }), [thumbnails, seed, aspect, tilt, overlap, tidy, gap, scale])
+  // Size only matters over a photo, to leave some of it showing; on a plain backdrop the cards fill the frame.
+  const shownScale = background ? scale : 1
+  const cardLayer = useMemo(() => thumbnails && drawCards(repeatItems(thumbnails, count ?? 0, seededRandom(seed)), seed, Number(aspect), { tilt, overlap, tidy, gap, scale: shownScale }), [thumbnails, count, seed, aspect, tilt, overlap, tidy, gap, shownScale])
   const placedLayer = useMemo(() => (cardLayer && surface && cv ? warpLayer(cv, cardLayer, surface) : cardLayer), [cardLayer, surface, cv])
+  // Over a photo the cards can be dragged to where they look best; fitted to a surface, the corners place them instead.
+  const [offset, setOffset] = useState(CENTRED)
+  const movable = background && !surface
+  const shownOffset = movable ? offset : CENTRED
+  const dragRef = useRef(null)
+  const clampOffset = (value) => Math.max(-MAX_OFFSET, Math.min(MAX_OFFSET, value))
+  // One finger moves the cards while the view isn't zoomed (usePinchZoom only sets a transform when it is); zoomed in,
+  // or with a second finger down, the gesture is the zoom's.
+  const canvasProps = corners ? {} : !movable ? zoomProps : {
+    ...zoomProps,
+    onPointerDown(e) {
+      zoomProps.onPointerDown(e)
+      const canvas = e.currentTarget
+      dragRef.current = e.isPrimary && !canvas.style.transform
+        ? { x: e.clientX, y: e.clientY, from: offset, width: canvas.offsetWidth, height: canvas.offsetHeight }
+        : null
+    },
+    onPointerMove(e) {
+      zoomProps.onPointerMove(e)
+      const drag = dragRef.current
+      if (!drag || !e.isPrimary) return
+      setOffset({ x: clampOffset(drag.from.x + (e.clientX - drag.x) / drag.width), y: clampOffset(drag.from.y + (e.clientY - drag.y) / drag.height) })
+    },
+    onPointerUp(e) { zoomProps.onPointerUp(e); dragRef.current = null },
+    onPointerCancel(e) { zoomProps.onPointerCancel(e); dragRef.current = null },
+  }
   useEffect(() => {
     if (!placedLayer) return
     setImage(null)
-    composeCollage(canvasRef.current, placedLayer, { fill: transparent ? null : colour, background })
+    composeCollage(canvasRef.current, placedLayer, { fill: transparent ? null : colour, background, offset: shownOffset })
     // Encoded up front so Share runs straight from the tap; Safari refuses share() once the tap is stale. After a
     // pause, so a stream of changes (the colour picker, a slider) doesn't encode a full-size image for each one.
     // PNG only when see-through: JPEG has no transparency, and is far smaller otherwise.
     let current = true
     const timer = setTimeout(() => canvasRef.current.toBlob((blob) => current && setImage(blob), transparent ? 'image/png' : 'image/jpeg', 0.9), ENCODE_DELAY_MS)
     return () => { current = false; clearTimeout(timer) }
-  }, [placedLayer, backdrop, colour])
+  }, [placedLayer, backdrop, colour, shownOffset.x, shownOffset.y])
 
   async function share() {
     const name = `cardbox-${(event || choice.replace('kind:', 'all-').replace('all-all', 'all')).replace(/[^\p{L}\p{N}]+/gu, '-')}.${image.type === 'image/png' ? 'png' : 'jpg'}`
@@ -418,7 +478,7 @@ function GroupPhoto({ cards, onClose }) {
           <input
             type="color" class="background-swatch" value={colour}
             onClick={() => plainBackdrop('colour')}
-            onInput={(e) => { setColour(e.target.value); localStorage.setItem('collageColour', e.target.value); plainBackdrop('colour') }}
+            onInput={(e) => { setColour(e.target.value); plainBackdrop('colour') }}
           />
         </label>
         <button type="button" aria-pressed={transparent} onClick={() => { plainBackdrop('transparent'); backgroundMenuRef.current.hidePopover() }}>{t('Transparent')}</button>
@@ -426,7 +486,7 @@ function GroupPhoto({ cards, onClose }) {
         <label>{t('Choose from library')}<input type="file" accept="image/*" hidden onChange={pickBackground} /></label>
       </div>
       <div class="cropper-stage">
-        <canvas ref={canvasRef} class={`group-photo${corners ? ' fitting' : ''}${transparent ? ' see-through' : ''}`} {...(corners ? {} : zoomProps)} />
+        <canvas ref={canvasRef} class={`group-photo${corners ? ' fitting' : ''}${transparent ? ' see-through' : ''}`} {...canvasProps} />
         {/* Drag the corners onto a table in the photo; the cards are warped to match once a corner is let go. */}
         {corners && canvasBox && (
           <div class="surface-editor" style={Object.fromEntries(Object.entries(canvasBox).map(([key, value]) => [key, `${value}px`]))}>
@@ -441,13 +501,13 @@ function GroupPhoto({ cards, onClose }) {
             ))}
           </div>
         )}
-        {!thumbnails && <div class="cropper-message">{chosen.length === 1 ? t('Laying out {count} card…', { count: 1 }) : t('Laying out {count} cards…', { count: chosen.length })}</div>}
+        {!thumbnails && <div class="cropper-message">{tn(chosen.length, 'Laying out {count} card…', 'Laying out {count} cards…')}</div>}
       </div>
       <div class="segmented collage-style" role="radiogroup" aria-label={t('Style')}>
         {[['pile', t('Pile')], ['tidy', t('Tidy')]].map(([value, label]) => (
           <button
-            type="button" key={value} role="radio" aria-checked={tidy === (value === 'tidy')}
-            onClick={() => { setTidy(value === 'tidy'); localStorage.setItem('collageStyle', value) }}
+            type="button" key={value} role="radio" aria-checked={style === value}
+            onClick={() => setStyle(value)}
           >{label}</button>
         ))}
       </div>
@@ -459,11 +519,12 @@ function GroupPhoto({ cards, onClose }) {
             <option value="front">{t('Fronts')}</option>
             <option value="back">{t('Backs')}</option>
             <option value="both">{t('Both')}</option>
+            <option value="apart">{t('Both, apart')}</option>
           </select>
         </label>
         <label class="collage-option">
           <span>{t('Shape')}</span>
-          <select value={aspect} onChange={(e) => { setAspect(e.target.value); localStorage.setItem('collageAspect', e.target.value) }}>
+          <select value={aspect} onChange={(e) => setAspect(e.target.value)}>
             <option value="1">1:1</option>
             <option value={String(4 / 5)}>4:5</option>
             <option value={String(9 / 16)}>9:16</option>
@@ -475,24 +536,34 @@ function GroupPhoto({ cards, onClose }) {
       <div class={`collage-sliders${adjusting ? ' open' : ''}`}>
         {!tidy && <label class="slider">
           <span>{t('Tilt')}</span>
-          <input type="range" min="0" max={MAX_TILT_LIMIT} step="1" value={tilt} onInput={(e) => { setTilt(Number(e.target.value)); localStorage.setItem('collageTilt', e.target.value) }} />
+          <input type="range" min="0" max={MAX_TILT_LIMIT} step="1" value={tilt} onInput={(e) => setTilt(Number(e.target.value))} />
           <output>{tilt}°</output>
         </label>}
         {!tidy && <label class="slider">
           <span>{t('Overlap')}</span>
-          <input type="range" min="0" max={MAX_OVERLAP_LIMIT * 100} step="1" value={Math.round(overlap * 100)} onInput={(e) => { setOverlap(e.target.value / 100); localStorage.setItem('collageOverlap', e.target.value / 100) }} />
+          <input type="range" min="0" max={MAX_OVERLAP_LIMIT * 100} step="1" value={Math.round(overlap * 100)} onInput={(e) => setOverlap(e.target.value / 100)} />
           <output>{Math.round(overlap * 100)}%</output>
         </label>}
         {tidy && <label class="slider">
           <span>{t('Gap')}</span>
-          <input type="range" min="0" max={MAX_TIDY_GAP * 100} step="0.5" value={gap * 100} onInput={(e) => { setGap(e.target.value / 100); localStorage.setItem('collageGap', e.target.value / 100) }} />
+          <input type="range" min="0" max={MAX_TIDY_GAP * 100} step="0.5" value={gap * 100} onInput={(e) => setGap(e.target.value / 100)} />
           <output>{gap * 100}%</output>
         </label>}
-        <label class="slider">
+        {background && <label class="slider">
           <span>{t('Size')}</span>
-          <input type="range" min="40" max="100" step="5" value={Math.round(scale * 100)} onInput={(e) => { setScale(e.target.value / 100); localStorage.setItem('collageScale', e.target.value / 100) }} />
+          <input type="range" min="40" max="100" step="5" value={Math.round(scale * 100)} onInput={(e) => setScale(e.target.value / 100)} />
           <output>{Math.round(scale * 100)}%</output>
-        </label>
+        </label>}
+        {cardCountEnabled() && <label class="slider">
+          <span>{t('Card count')}</span>
+          {/* From each card once, up to the cap; above the collection's size, cards repeat to make it up. */}
+          <input
+            type="range" min={pieces} max={Math.max(pieces, MAX_CARD_COUNT)} step="1" value={shownCount}
+            onInput={(e) => setCountShown(Number(e.target.value))}
+            onChange={(e) => { const value = Number(e.target.value); setCount(value > pieces ? value : null); setCountShown(null) }}
+          />
+          <output>{shownCount}</output>
+        </label>}
         <label class="slider">
           <span>{t('Layout number')}</span>
           <input class="seed" inputmode="numeric" value={seed} onChange={(e) => { const value = parseInt(e.target.value, 10); if (value >= 0) setSeed(value); else e.target.value = seed }} />
@@ -529,22 +600,39 @@ function useRunner(onChanged) {
   return [status, run]
 }
 
-// A drawer over the list (bottom sheet on phones). It has its own URL like a screen, so swipe-back closes it too.
-// page 'sync' pushes the Sync panel inside the drawer, iOS Settings style; onClose then steps back to the main page.
-// Offers a few real cards and stickers, so a first look at the app isn't an empty screen. Gives the size first (it's
-// several MB, which matters on mobile data), then shows the download's progress. onLoaded(count) once imported.
+// The demo pack this phone last downloaded: { version: DEMO_VERSION then, ids }.
+const DEMO_KEY = 'demoCards'
+const DEMO_URL = '/demo.zip'
+
+// Offers a few real cards and stickers, so a first look at the app isn't an empty screen. Asks before downloading the
+// pack, giving the size first (it's several MB, which matters on mobile data), then shows the download's progress and
+// opens the cards as a pack. onLoaded(count) once imported. If this phone already has the current pack (same version,
+// every card still there), it opens straight away from those, with no prompt or download.
 function DemoDialog({ onClose, onLoaded }) {
   const dialogRef = useRef()
-  const bytes = DEMO_BYTES
   const [percent, setPercent] = useState(null)
   const [error, setError] = useState(null)
   // { done, total } cards unpacked, once the download is in.
   const [importing, setImporting] = useState(null)
-  // The imported cards, shown as a pack to open.
+  // The cards, shown as a pack to open; and whether they were already on this phone rather than just downloaded.
   const [pack, setPack] = useState(null)
+  const [alreadyHad, setAlreadyHad] = useState(false)
+  const [asking, setAsking] = useState(false)
   useEffect(() => {
-    dialogRef.current.showModal()
+    (async () => {
+      let saved = null
+      try { saved = JSON.parse(localStorage.getItem(DEMO_KEY)) } catch {}
+      if (saved?.version === DEMO_VERSION) {
+        const cards = await getCards(saved.ids)
+        if (cards.length === saved.ids.length) {
+          setAlreadyHad(true)
+          return setPack(cards)
+        }
+      }
+      setAsking(true)
+    })()
   }, [])
+  useEffect(() => { if (asking) dialogRef.current.showModal() }, [asking])
 
   async function download() {
     setError(null)
@@ -558,11 +646,12 @@ function DemoDialog({ onClose, onLoaded }) {
       for (let chunk; !(chunk = await reader.read()).done;) {
         chunks.push(chunk.value)
         received += chunk.value.length
-        setPercent(Math.min(100, Math.floor((received / bytes) * 100)))
+        setPercent(Math.min(100, Math.floor((received / DEMO_BYTES) * 100)))
       }
       setImporting({ done: 0, total: 0 })
       const ids = await importBackup(new Blob(chunks), (done, total) => setImporting({ done, total }))
-      const cards = (await Promise.all(ids.map(getCard))).filter(Boolean)
+      localStorage.setItem(DEMO_KEY, JSON.stringify({ version: DEMO_VERSION, ids }))
+      const cards = await getCards(ids)
       dialogRef.current.close()
       setPack(cards)
     } catch (failure) {
@@ -573,11 +662,12 @@ function DemoDialog({ onClose, onLoaded }) {
   }
 
   const downloading = percent !== null
-  if (pack) return <PackOpening cards={pack} name={t('Ranran')} onDone={() => onLoaded(pack.length)} />
+  if (pack) return <PackOpening cards={pack} name={t('Ranran')} onDone={() => (alreadyHad ? onClose() : onLoaded(pack.length))} />
+  if (!asking) return null
   return (
     <dialog ref={dialogRef} class="alert" onCancel={(e) => { e.preventDefault(); if (!downloading) onClose() }}>
       <h2>{t('Download Ranran’s cards?')}</h2>
-      <p class="muted">{error ?? t('{size} MB of cards and stickers, with the photos they were cropped from.', { size: (bytes / 1e6).toFixed(1) })}</p>
+      <p class="muted">{error ?? t('{size} MB of cards and stickers, with the photos they were cropped from.', { size: (DEMO_BYTES / 1e6).toFixed(1) })}</p>
       {downloading
         ? (
           <>
@@ -594,7 +684,13 @@ function DemoDialog({ onClose, onLoaded }) {
     </dialog>
   )
 }
-const DEMO_URL = '/demo.zip'
+// The dialog to render (anywhere that outlasts an import, which can empty the screen it was started from) and the
+// function that opens it. A successful download is reported through run.
+function useDemoDialog(run) {
+  const [open, setOpen] = useState(false)
+  const dialog = open && <DemoDialog onClose={() => setOpen(false)} onLoaded={(count) => { setOpen(false); run(() => t('Imported {count} cards', { count })) }} />
+  return [dialog, () => setOpen(true)]
+}
 
 function ImportButton({ run, class: className = '' }) {
   return (
@@ -607,7 +703,7 @@ function ImportButton({ run, class: className = '' }) {
         onChange={(e) => {
           const file = e.target.files[0]
           e.target.value = ''
-          if (file) run(async () => { const count = (await importBackup(file)).length; return count === 1 ? t('Imported {count} card', { count }) : t('Imported {count} cards', { count }) })
+          if (file) run(async () => { const count = (await importBackup(file)).length; return tn(count, 'Imported {count} card', 'Imported {count} cards') })
         }}
       />
     </label>
@@ -648,39 +744,35 @@ function PhotoStorage({ cards }) {
   )
 }
 
-function Settings({ cards, lastBackup, page, syncCode, onClose, onChanged, onSync, onReceive, onCollections, onTutorial }) {
+// A drawer over the list (bottom sheet on phones). It has its own URL like a screen, so swipe-back closes it too.
+// page 'sync' pushes the Sync panel inside the drawer, iOS Settings style; onClose then steps back to the main page.
+function Settings({ cards, lastBackup, page, syncCode, onClose, onChanged, onSync, onCollections, onBeta, onTutorial }) {
   const overdue = overdueDays(cards.length, lastBackup)
   const [status, run] = useRunner(onChanged)
-  const [demo, setDemo] = useState(false)
-  const dialogRef = useRef()
-  useEffect(() => { dialogRef.current.showModal() }, [])
+  const [demoDialog, showDemo] = useDemoDialog(run)
+  const modal = useModal(onClose)
 
   // Adds every QR code link found on each card's photos to its Social list, saving as it goes.
   async function scanAllQr(setStatus) {
     const { addQrSocials } = await import('./qr.js')
     const updated = await addQrSocials(cards, (index) => setStatus(t('Checking card photos: {current} of {total}…', { current: index + 1, total: cards.length })))
     return updated
-      ? (updated === 1 ? t('Added QR links to {count} card.', { count: updated }) : t('Added QR links to {count} cards.', { count: updated }))
+      ? tn(updated, 'Added QR links to {count} card.', 'Added QR links to {count} cards.')
       : t('No new QR links found.')
   }
 
   return (
-    <dialog
-      ref={dialogRef}
-      class="settings"
-      // Esc: leave through onClose like the other ways out, which removes the dialog.
-      onCancel={(e) => { e.preventDefault(); onClose() }}
-      onClick={(e) => e.target === dialogRef.current && onClose()}
-    >
+    <dialog class="settings" {...modal}>
       {page === 'sync' ? <div class="settings-page pushed" key="sync"><SyncScreen initialCode={syncCode} onDone={onClose} /></div>
       : page === 'collections' ? <div class="settings-page pushed" key="collections"><CollectionOrder cards={cards} onDone={onClose} /></div>
+      : page === 'beta' ? <div class="settings-page pushed" key="beta"><BetaFeatures onDone={onClose} /></div>
       : <div class="settings-page" key="main">
       <header class="list-header">
         <h1>{t('Settings')}</h1>
         <button type="button" class="icon-button" aria-label={t('Close')} onClick={onClose}>✕</button>
       </header>
       <section class="settings-group">
-        <h2>{t('Backup & sync')}</h2>
+        <h2><Glyph name="sync" />{t('Backup & sync')}</h2>
         <div class="settings-list">
           {overdue !== null && (
             <div class="backup-warning">
@@ -691,14 +783,13 @@ function Settings({ cards, lastBackup, page, syncCode, onClose, onChanged, onSyn
           <button type="button" disabled={!cards.length} onClick={() => run(exportBackup, t('Backup exported'))}>{t('Export backup')}</button>
           <ImportButton run={run} />
           <button type="button" class="chevron" onClick={onSync}>{t('Sync with another device')}</button>
-          <button type="button" class="chevron" onClick={onReceive}>{t('Scan QR code')}</button>
         </div>
         {overdue === null && cards.length > 0 && (
           <p class="settings-note">{!lastBackup ? t('Never backed up') : daysSince(lastBackup) ? t('Last backup or sync {days} days ago', { days: daysSince(lastBackup) }) : t('Last backup or sync today')}</p>
         )}
       </section>
       <section class="settings-group">
-        <h2>{t('Cards')}</h2>
+        <h2><Glyph name="cards" />{t('Cards')}</h2>
         <div class="settings-list">
           <button type="button" class="chevron" disabled={!cards.length} onClick={onCollections}>{t('Reorder collections')}</button>
           <button type="button" disabled={!cards.length} onClick={() => run(scanAllQr)}>{t('Find links in card photos')}</button>
@@ -706,16 +797,16 @@ function Settings({ cards, lastBackup, page, syncCode, onClose, onChanged, onSyn
         <p class="settings-note">{t('Finds QR codes on your card photos and adds their links to each card’s Social list.')}</p>
       </section>
       {status && <p class="muted">{status}</p>}
-      {demo && <DemoDialog onClose={() => setDemo(false)} onLoaded={(count) => { setDemo(false); run(() => t('Imported {count} cards', { count })) }} />}
+      {demoDialog}
       <section class="settings-group">
-        <h2>{t('Help')}</h2>
+        <h2><Glyph name="help" />{t('Help')}</h2>
         <div class="settings-list">
           <button type="button" class="chevron" onClick={onTutorial}>{t('How to use Cardbox')}</button>
-          <button type="button" onClick={() => setDemo(true)}>{t('Download Ranran’s cards')}</button>
+          <button type="button" onClick={showDemo}>{t('Download Ranran’s cards')}</button>
         </div>
       </section>
       <section class="settings-group">
-        <h2>{t('Language')}</h2>
+        <h2><Glyph name="language" />{t('Language')}</h2>
         <div class="settings-list">
           <label class="chevron">
             {t('Language')}
@@ -726,11 +817,17 @@ function Settings({ cards, lastBackup, page, syncCode, onClose, onChanged, onSyn
         </div>
       </section>
       <section class="settings-group">
-        <h2>{t('Storage')}</h2>
+        <h2><Glyph name="storage" />{t('Storage')}</h2>
         <PhotoStorage cards={cards} />
       </section>
       <section class="settings-group">
-        <h2>{t('Reset')}</h2>
+        <h2><Glyph name="beta" />{t('More')}</h2>
+        <div class="settings-list">
+          <button type="button" class="chevron" onClick={onBeta}>{t('Beta features')}</button>
+        </div>
+      </section>
+      <section class="settings-group">
+        <h2><Glyph name="reset" />{t('Reset')}</h2>
         <div class="settings-list">
           <ArmedButton
             label={t('Clear all details')}
@@ -746,13 +843,12 @@ function Settings({ cards, lastBackup, page, syncCode, onClose, onChanged, onSyn
           />
         </div>
       </section>
-      <p class="muted build">{t('Build {time}', { time: BUILD_TIME })}</p>
+      <p class="muted build">{t('Build {time}', { time: BUILD_TIME })}<br /><a href="https://claws.blue" target="_blank" rel="noopener">claws.blue</a></p>
       </div>}
     </dialog>
   )
 }
 
-// tab: 'cards' or 'stickers', which kind of item the list shows (and what New shoots).
 const COLLECTION_ORDER_KEY = 'collectionOrder'
 const savedCollectionOrder = () => {
   try { return JSON.parse(localStorage.getItem(COLLECTION_ORDER_KEY)) ?? [] } catch { return [] }
@@ -788,23 +884,18 @@ function collections(cards, everything = cards) {
 
 // The collections checklist for the cards picked in Select mode. Each collection is ticked when all of them are in it,
 // marked when some are; tapping puts all of them in it, or (when ticked) takes all of them out.
-function CollectionSheet({ chosen, events, onToggle, onClose }) {
-  const dialogRef = useRef()
+// Done also ends Select mode (onDone); Esc or a tap outside only closes the sheet, back to the selection.
+function CollectionSheet({ chosen, events, onToggle, onClose, onDone }) {
+  const modal = useModal(onClose)
   const [creating, setCreating] = useState(false)
   // The collections as they were on opening, plus any made here: one emptied here stays listed, to tick again.
   const [names, setNames] = useState(events)
   const listed = [...new Set([...names, ...events])]
-  useEffect(() => { dialogRef.current.showModal() }, [])
   return (
-    <dialog
-      ref={dialogRef}
-      class="collection-sheet"
-      onCancel={(e) => { e.preventDefault(); onClose() }}
-      onClick={(e) => e.target === dialogRef.current && onClose()}
-    >
+    <dialog class="collection-sheet" {...modal}>
       <header class="list-header">
         <h2>{t('Collections for {count}', { count: chosen.length })}</h2>
-        <button type="button" class="nav-action" onClick={onClose}>{t('Done')}</button>
+        <button type="button" class="nav-action" onClick={onDone}>{t('Done')}</button>
       </header>
       <div class="settings-list">
         {listed.map((name) => {
@@ -825,10 +916,37 @@ function CollectionSheet({ chosen, events, onToggle, onClose }) {
   )
 }
 
+// Settings → Beta features: switches for features still being tried out.
+function BetaFeatures({ onDone }) {
+  const [packs, setPacks] = useStoredState(PACKS_KEY)
+  const [cardCount, setCardCount] = useStoredState(CARD_COUNT_KEY)
+  return (
+    <>
+      <BackHeader title={t('Beta features')} onBack={onDone} />
+      <div class="settings-list">
+        {/* switch: drawn as an iOS switch by Safari, a checkbox elsewhere. */}
+        <label>
+          {t('Send packs')}
+          <input type="checkbox" switch checked={packs === '1'} onChange={(e) => setPacks(e.target.checked ? '1' : '')} />
+        </label>
+      </div>
+      <p class="settings-note">{t('Adds Send pack to each collection: 8 random cards from it, for another phone to open as a pack.')}</p>
+      <div class="settings-list">
+        <label>
+          {t('Collage card count')}
+          <input type="checkbox" switch checked={cardCount === '1'} onChange={(e) => setCardCount(e.target.checked ? '1' : '')} />
+        </label>
+      </div>
+      <p class="settings-note">{t('Adds a Card count slider to Collage, which repeats cards to fill a bigger collage.')}</p>
+    </>
+  )
+}
+
 // Settings → Reorder collections: drag the collections' names into the order the list shows them in.
 function CollectionOrder({ cards, onDone }) {
-  const [events, setEvents] = useState(() => collections(cards).map(([event]) => event))
-  const counts = useMemo(() => Object.fromEntries(collections(cards).map(([event, group]) => [event, group.length])), [cards])
+  const grouped = useMemo(() => collections(cards), [cards])
+  const [events, setEvents] = useState(() => grouped.map(([event]) => event))
+  const counts = useMemo(() => Object.fromEntries(grouped.map(([event, group]) => [event, group.length])), [grouped])
   const { drag, rowProps } = useReorder((order) => {
     localStorage.setItem(COLLECTION_ORDER_KEY, JSON.stringify(order))
     setEvents(order)
@@ -850,38 +968,50 @@ function CollectionOrder({ cards, onDone }) {
   )
 }
 
+// tab: 'cards' or 'stickers', which kind of item the list shows (and what New shoots).
 function List({ cards: items, tab, onTab, events, lastBackup, storageBroken, onOpen, onRapid, onGroupPhoto, onSettings, onSync, onChanged }) {
-  const cards = items.filter((item) => (item.kind === 'sticker') === (tab === 'stickers'))
+  const cards = useMemo(() => items.filter((item) => (item.kind === 'sticker') === (tab === 'stickers')), [items, tab])
   const [query, setQuery] = useState('')
   // Which side of each card the list shows: 'both', 'front' or 'back'. Stickers have only a front.
-  const [sides, setSides] = useState(() => localStorage.getItem('listSides') || 'both')
-  const chooseSides = (next) => { localStorage.setItem('listSides', next); setSides(next) }
+  const [sides, chooseSides] = useStoredState('listSides', (stored) => stored || 'both')
   const shownSides = tab === 'stickers' ? 'front' : sides
   // Compact: each collection as one overlapping row, like a hand of cards.
-  const [compact, setCompact] = useState(() => localStorage.getItem('listLayout') !== 'grid')
+  const [layout, setLayout] = useStoredState('listLayout', (stored) => (stored === 'grid' ? 'grid' : 'compact'))
+  const compact = layout !== 'grid'
   const cardsPerFan = useCardsPerFan()
-  const toggleCompact = () => { localStorage.setItem('listLayout', compact ? 'grid' : 'compact'); setCompact(!compact) }
+  const toggleCompact = () => setLayout(compact ? 'grid' : 'compact')
   const [status, run] = useRunner(onChanged)
-  const [demo, setDemo] = useState(false)
+  const [demoDialog, showDemo] = useDemoDialog(run)
   const backupDue = overdueDays(items.length, lastBackup) !== null
   // Select mode, for moving many cards to an event at once: null when off, else the set of chosen card ids.
   const [selected, setSelected] = useState(null)
   // Whether the collections checklist for the selected cards is open.
   const [filing, setFiling] = useState(false)
   const selecting = selected !== null
-  const activate = (card) => (selecting
-    ? setSelected((current) => {
-      const next = new Set(current)
-      if (!next.delete(card.id)) next.add(card.id)
-      return next
-    })
-    : onOpen(card.id))
+  // Esc leaves Select mode, unless it's closing a dialog opened from it.
+  useEffect(() => {
+    if (!selecting) return
+    const onKey = (e) => e.key === 'Escape' && !document.querySelector('dialog[open]') && setSelected(null)
+    addEventListener('keydown', onKey)
+    return () => removeEventListener('keydown', onKey)
+  }, [selecting])
+  const activate = (card) => (selecting ? setSelected((current) => toggled(current, card.id)) : onOpen(card.id))
   const toggle = (ids, on) => setSelected((current) => {
     const next = new Set(current)
     ids.forEach((id) => (on ? next.add(id) : next.delete(id)))
     return next
   })
   // Puts every selected card in the collection (at its top, as if just added), or takes every one out of it.
+  async function deleteSelected() {
+    const count = selected.size
+    const question = tab === 'stickers'
+      ? tn(count, 'Delete {count} sticker?', 'Delete {count} stickers?')
+      : tn(count, 'Delete {count} card?', 'Delete {count} cards?')
+    if (!await ask(question, { confirm: t('Delete'), danger: true })) return
+    for (const id of selected) await deleteCard(id)
+    setSelected(null)
+    onChanged()
+  }
   async function fileSelected(event, on) {
     const changed = cards.filter((card) => selected.has(card.id) && card.collections.includes(event) !== on)
     await saveCards(changed.map((card) => {
@@ -900,12 +1030,16 @@ function List({ cards: items, tab, onTab, events, lastBackup, storageBroken, onO
   // Reordering a filtered subset would be ambiguous, so it's off while searching.
   const canDrag = !selecting && !query.trim()
 
+  // The collection being sent as a pack, if any.
+  const [packing, setPacking] = useState(null)
   const groups = useMemo(() => {
     const needle = query.trim().toLowerCase()
     return collections(cards.filter((card) => !needle || searchText(card).includes(needle)), items)
       .map(([event, group]) => [event, group.sort(compareInGroup(event))])
-  }, [cards, query])
+  }, [cards, items, query])
 
+  // Cards and stickers alike, whichever tab is showing.
+  if (packing) return <PackSend cards={items.filter((card) => card.collections.includes(packing))} name={packing} onClose={() => setPacking(null)} />
   return (
     <main class={`list ${tab}${tab === 'cards' && sides !== 'both' ? ' one-side' : ''}`}>
       {storageBroken && (
@@ -961,48 +1095,57 @@ function List({ cards: items, tab, onTab, events, lastBackup, storageBroken, onO
         </div>
       )}
       </div>
-      {groups.map(([event, group]) => (
-        <section key={event}>
-          <div class="group-heading">
-            <h2>{event || t('No collection')} <span class="group-count">{group.length}</span></h2>
-            {selecting && (() => {
-              const ids = group.map((card) => card.id)
-              const all = ids.every((id) => selected.has(id))
-              return <button type="button" class="nav-action" onClick={() => toggle(ids, !all)}>{all ? t('Clear') : t('Select all')}</button>
-            })()}
-          </div>
-          {compact ? (
-            // A collection that fits in one hand spreads out to fill the row (spaced as if three at least, which the
-            // opening maths needs); one that wraps keeps every row spaced alike.
-            <div class="card-fans" style={{ '--cards-per-fan': group.length < cardsPerFan ? Math.max(3, group.length) : cardsPerFan }}>
-              {Array.from({ length: Math.ceil(group.length / cardsPerFan) }, (_, i) => (
-                <CardFan
-                  key={i}
-                  cards={(drag?.group === event ? drag.ids.map((id) => group.find((card) => card.id === id)) : group).slice(i * cardsPerFan, (i + 1) * cardsPerFan)}
-                  first={i * cardsPerFan}
-                  dragId={drag?.id}
-                  dragHandlers={canDrag ? (id) => rowProps(event, group.map((other) => other.id), id) : null}
-                  side={shownSides === 'back' ? 'back' : 'front'}
-                  selected={selected}
-                  onActivate={activate}
+      {groups.map(([event, group]) => {
+        // Mid-drag, the cards in their live order.
+        const shown = drag?.group === event ? drag.ids.map((id) => group.find((card) => card.id === id)) : group
+        const ids = group.map((card) => card.id)
+        return (
+          <section key={event}>
+            <div class="group-heading">
+              <h2>{event || t('No collection')} <span class="group-count">{group.length}</span></h2>
+              {event && !selecting && packsEnabled() && (
+                <button type="button" class="nav-action pack-send" onClick={() => setPacking(event)}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><rect x="3.5" y="8" width="17" height="5" rx="1" /><path d="M5 13v7h14v-7M12 8v12M12 8c-1.5-3.5-5.5-4-5.5-1.5C6.5 8 12 8 12 8zM12 8c1.5-3.5 5.5-4 5.5-1.5C17.5 8 12 8 12 8z" /></svg>{t('Send pack')}<span class="beta-tag">Beta</span>
+                </button>
+              )}
+              {selecting && (() => {
+                const all = ids.every((id) => selected.has(id))
+                return <button type="button" class="nav-action" onClick={() => toggle(ids, !all)}>{all ? t('Clear') : t('Select all')}</button>
+              })()}
+            </div>
+            {compact ? (
+              // A collection that fits in one hand spreads out to fill the row (spaced as if three at least, which the
+              // opening maths needs); one that wraps keeps every row spaced alike.
+              <div class="card-fans" style={{ '--cards-per-fan': group.length < cardsPerFan ? Math.max(3, group.length) : cardsPerFan }}>
+                {Array.from({ length: Math.ceil(group.length / cardsPerFan) }, (_, i) => (
+                  <CardFan
+                    key={i}
+                    cards={shown.slice(i * cardsPerFan, (i + 1) * cardsPerFan)}
+                    first={i * cardsPerFan}
+                    dragId={drag?.id}
+                    dragHandlers={canDrag ? (id) => rowProps(event, ids, id) : null}
+                    side={shownSides === 'back' ? 'back' : 'front'}
+                    selected={selected}
+                    onActivate={activate}
+                  />
+                ))}
+              </div>
+            ) : <div class="card-rows">
+              {shown.map((card) => (
+                <CardRow
+                  key={card.id}
+                  card={card}
+                  sides={shownSides}
+                  pressed={selecting ? selected.has(card.id) : undefined}
+                  dragging={drag?.id === card.id}
+                  dragHandlers={canDrag ? rowProps(event, ids, card.id) : null}
+                  onActivate={() => activate(card)}
                 />
               ))}
-            </div>
-          ) : <div class="card-rows">
-            {(drag?.group === event ? drag.ids.map((id) => group.find((card) => card.id === id)) : group).map((card) => (
-              <CardRow
-                key={card.id}
-                card={card}
-                sides={shownSides}
-                pressed={selecting ? selected.has(card.id) : undefined}
-                dragging={drag?.id === card.id}
-                dragHandlers={canDrag ? rowProps(event, group.map((other) => other.id), card.id) : null}
-                onActivate={() => activate(card)}
-              />
-            ))}
-          </div>}
-        </section>
-      ))}
+            </div>}
+          </section>
+        )
+      })}
       {!groups.length && cards.length > 0 && <p class="muted">{t('No matches.')}</p>}
       {items.length > 0 && !cards.length && (
         <div class="empty-state">
@@ -1017,26 +1160,33 @@ function List({ cards: items, tab, onTab, events, lastBackup, storageBroken, onO
           <h2>{t('No cards or stickers yet')}</h2>
           <p class="muted">{t('Photograph the cards and stickers you collect, or receive one beamed from another phone. You can also bring them over from a backup or another device.')}</p>
           <button type="button" class="primary" onClick={onRapid}><CameraIcon />{t('Take photos or scan a QR code')}</button>
-          <button type="button" class="glass" onClick={() => setDemo(true)}>{t('Download Ranran’s cards')}</button>
+          <button type="button" class="glass" onClick={showDemo}>{t('Download Ranran’s cards')}</button>
           <ImportButton run={run} class="glass" />
           <button type="button" class="glass" onClick={onSync}>{t('Sync from another device')}</button>
           <LanguageSwitch class="empty-language" />
         </div>
       )}
-      {demo && <DemoDialog onClose={() => setDemo(false)} onLoaded={(count) => { setDemo(false); run(() => t('Imported {count} cards', { count })) }} />}
+      {demoDialog}
       {status && <p class="muted">{status}</p>}
       {selecting
         ? (
           <nav class="action-bar">
-            <button type="button" disabled={!selected.size} onClick={() => setFiling(true)}>
-              {selected.size ? t('Collections for {count}', { count: selected.size }) : t('Tap cards to select')}
+            <button type="button" class="edit-collections" disabled={!selected.size} onClick={() => setFiling(true)}>
+              {selected.size > 0 && <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5H9l2 2.5h8.5A1.5 1.5 0 0 1 21 9v9.5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z" /></svg>}
+              {selected.size ? t('Edit collections · {count}', { count: selected.size }) : t('Tap cards to select')}
             </button>
+            {selected.size > 0 && (
+              <button type="button" class="select-delete danger" aria-label={t('Delete')} onClick={deleteSelected}>
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3" /></svg>
+              </button>
+            )}
             {filing && (
               <CollectionSheet
                 chosen={cards.filter((card) => selected.has(card.id))}
                 events={events}
                 onToggle={fileSelected}
                 onClose={() => setFiling(false)}
+                onDone={() => { setFiling(false); setSelected(null) }}
               />
             )}
           </nav>
@@ -1159,7 +1309,7 @@ function Detail({ card, events, onDone, onRefresh, setLeaveGuard }) {
 
   // Text edits wait for Save; photo changes (retake, crop, swap, size) save straight away and leave them pending.
   const dirty = JSON.stringify(cleanValues(values)) !== JSON.stringify(cleanValues(valuesOf(card)))
-  const confirmDiscard = () => confirm(t('Discard unsaved changes?'))
+  const confirmDiscard = () => ask(t('Discard unsaved changes?'), { confirm: t('Discard'), danger: true })
   useEffect(() => {
     setLeaveGuard(dirty ? confirmDiscard : null)
     // A crop or retake in progress isn't saved yet either, so an update waits for it.
@@ -1179,9 +1329,9 @@ function Detail({ card, events, onDone, onRefresh, setLeaveGuard }) {
   if (beaming) return <BeamSend card={card} onClose={() => setBeaming(false)} />
   return (
     <main class="detail">
-      <BackHeader title={card.name || (sticker ? t('Sticker') : t('Card'))} onBack={() => (!dirty || confirmDiscard()) && onDone()}>
+      <BackHeader title={card.name || (sticker ? t('Sticker') : t('Card'))} onBack={async () => { if (!dirty || await confirmDiscard()) onDone() }}>
         <button type="button" class="icon-button" aria-label={t('Beam by QR')} onClick={() => setBeaming(true)}>
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12" /><path d="m7.5 7.5 4.5-4.5 4.5 4.5" /><path d="M8 11H6a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2h-2" /></svg>
+          <ShareIcon />
         </button>
         {dirty && <button type="button" class="nav-action primary" onClick={save}>{t('Save')}</button>}
       </BackHeader>
@@ -1265,13 +1415,24 @@ function viewFromHash() {
   if (fragment.startsWith('receive/')) return { name: 'receive', code: fragment.slice('receive/'.length) }
   // A bare #receive was the old scanner screen; the camera's QR mode does that now.
   if (fragment === 'receive') return { name: 'scan' }
-  if (['rapid', 'scan', 'group', 'settings', 'collections'].includes(fragment)) return { name: fragment }
+  // #demo: a link to hand out that opens the demo pack (see DemoDialog).
+  if (['rapid', 'scan', 'group', 'settings', 'collections', 'beta', 'demo'].includes(fragment)) return { name: fragment }
   return { name: 'list' }
 }
 const hashOf = (view) => (view.name === 'detail' ? `#card/${encodeURIComponent(view.id)}` : `#${view.name}`)
+// Screens shown as the Settings drawer over the list.
+const DRAWER_VIEWS = ['settings', 'sync', 'collections', 'beta']
+
+// A QR screen the page was showing when iOS cleared it from memory comes back (see rememberShown).
+function startView() {
+  const shown = shownPairing()
+  if (shown?.kind === 'send') return { name: 'send', shown }
+  if (shown?.kind === 'sync') return { name: 'sync', code: null }
+  return viewFromHash()
+}
 
 export function App() {
-  const [view, setView] = useState(viewFromHash)
+  const [view, setView] = useState(startView)
   const [cards, setCards] = useState(null)
   const [lastBackup, setLastBackup] = useState(null)
   const [storageBroken, setStorageBroken] = useState(false)
@@ -1284,20 +1445,21 @@ export function App() {
   // The page scroll is shared by every screen: a full screen opens at its top, and the list comes back where it was.
   const listScrollRef = useRef(0)
   // Which tab the list is on; New shoots that kind too.
-  const [tab, setTab] = useState(() => (localStorage.getItem('listTab') === 'stickers' ? 'stickers' : 'cards'))
-  const chooseTab = (next) => { localStorage.setItem('listTab', next); setTab(next); scrollTo(0, 0) }
+  const [tab, setTab] = useStoredState('listTab', (stored) => (stored === 'stickers' ? 'stickers' : 'cards'))
+  const chooseTab = (next) => { setTab(next); scrollTo(0, 0) }
   const [tutorial, setTutorial] = useState(() => !tutorialSeen())
   useLayoutEffect(() => {
     if (view.name === 'list') scrollTo(0, listScrollRef.current)
-    else if (!['settings', 'sync', 'collections'].includes(view.name)) scrollTo(0, 0)
+    else if (!DRAWER_VIEWS.includes(view.name)) scrollTo(0, 0)
   }, [view.name, view.id])
   // Set by a screen holding unsaved photos; returns false to stay when the user swipes or presses Back.
   const leaveGuardRef = useRef(null)
   const leavingRef = useRef(false)
 
   async function refresh() {
-    setCards(await listCards())
-    setLastBackup((await getLastBackup()) ?? null)
+    const [loaded, backup] = await Promise.all([listCards(), getLastBackup()])
+    setCards(loaded)
+    setLastBackup(backup ?? null)
   }
   useEffect(() => {
     refresh()
@@ -1310,14 +1472,19 @@ export function App() {
   useEffect(() => {
     function onHashChange() {
       const next = viewFromHash()
-      if (!leavingRef.current && leaveGuardRef.current && !leaveGuardRef.current()) {
-        // Undo the browser's step back by putting the current screen's URL back.
+      const guard = leaveGuardRef.current
+      if (!leavingRef.current && guard) {
+        // Undo the browser's step back by putting the current screen's URL back, then leave for real if the guard agrees.
         history.pushState(null, '', hashOf(viewRef.current))
+        guard().then((ok) => {
+          if (!ok || leaveGuardRef.current !== guard) return
+          leavingRef.current = true
+          history.back()
+        })
         return
       }
       leavingRef.current = false
-      leaveGuardRef.current = null
-      setUnsavedWork(false)
+      setLeaveGuard(null)
       setView(next)
       // The settings drawer sits over the list, so coming back to it (e.g. from Sync) shows fresh cards too.
       if (next.name === 'list' || next.name === 'settings') refresh()
@@ -1337,20 +1504,22 @@ export function App() {
     leavingRef.current = true
     if (openedFromListRef.current) return history.back()
     // Arrived straight on this screen (a reload or a link): there's no list entry behind it to step back to.
-    history.replaceState(null, '', location.pathname + location.search)
+    replaceView({ name: 'list' })
     leavingRef.current = false
-    leaveGuardRef.current = null
-    setUnsavedWork(false)
-    setView({ name: 'list' })
+    setLeaveGuard(null)
     refresh()
   }
+  // Swaps the current history entry for the screen, rather than adding one.
+  function replaceView(next) {
+    history.replaceState(null, '', next.name === 'list' ? location.pathname + location.search : hashOf(next))
+    setView(next)
+  }
   const setLeaveGuard = (guard) => { leaveGuardRef.current = guard; setUnsavedWork(!!guard) }
-  // Sync and Reorder collections sit one level inside the settings drawer, so leaving goes back to the drawer, even
+  // Sync, Reorder collections and Beta features sit one level inside the settings drawer, so leaving goes back to the drawer, even
   // when a scanned sync link opened Sync directly.
   function backToSettings() {
     if (openedFromListRef.current) return leave()
-    history.replaceState(null, '', '#settings')
-    setView({ name: 'settings' })
+    replaceView({ name: 'settings' })
     refresh()
   }
 
@@ -1359,6 +1528,7 @@ export function App() {
 
   if (view.name === 'rapid' || view.name === 'scan') return <RapidCapture events={events} mode={view.name === 'scan' ? 'qr' : tab} onDone={leave} onChanged={refresh} onCode={async (hash) => { await refresh(); history.replaceState(null, '', hash); setView(viewFromHash()) }} setLeaveGuard={setLeaveGuard} />
   if (view.name === 'group') return <GroupPhoto cards={cards} onClose={leave} />
+  if (view.name === 'send') return <ResumedSend shown={view.shown} onClose={leave} />
   // The received card replaces the Receive screen in history, so Back from it doesn't reopen the camera.
   // A scanned sync link replaces it the same way, so Back from Sync returns to where the scanner was opened.
   if (view.name === 'receive') {
@@ -1366,7 +1536,8 @@ export function App() {
       <BeamReceive
         code={view.code}
         onClose={leave}
-        onDone={async (id) => { await refresh(); history.replaceState(null, '', hashOf({ name: 'detail', id })); setView({ name: 'detail', id }) }}
+        onDone={async (id) => { await refresh(); replaceView({ name: 'detail', id }) }}
+        onPackDone={async () => { await refresh(); replaceView({ name: 'list' }) }}
       />
     )
   }
@@ -1390,7 +1561,7 @@ export function App() {
         onSync={() => open({ name: 'sync' })}
         onChanged={refresh}
       />
-      {['settings', 'sync', 'collections'].includes(view.name) && (
+      {DRAWER_VIEWS.includes(view.name) && (
         <Settings
           cards={cards}
           lastBackup={lastBackup}
@@ -1399,11 +1570,12 @@ export function App() {
           onClose={view.name === 'settings' ? leave : backToSettings}
           onChanged={refresh}
           onSync={() => open({ name: 'sync' })}
-          onReceive={() => open({ name: 'scan' })}
           onCollections={() => open({ name: 'collections' })}
+          onBeta={() => open({ name: 'beta' })}
           onTutorial={() => setTutorial(true)}
         />
       )}
+      {view.name === 'demo' && <DemoDialog onClose={leave} onLoaded={leave} />}
       {tutorial && <Tutorial onDone={() => setTutorial(false)} />}
     </>
   )

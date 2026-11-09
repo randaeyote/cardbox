@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { planSync, parsePairing, parseSyncLink, parseReceiveLink, pairingProof, mergeTied, contentOf } from './sync.js'
+import { planSync, planDeletes, packIds, PACK_SIZE, parsePairing, parseSyncLink, parseReceiveLink, pairingProof, mergeTied, contentOf } from './sync.js'
 
 // cards: { id: time } or { id: [time, content] }, for brevity.
 const state = (cards = {}) => Object.fromEntries(Object.entries(cards).map(([id, value]) => {
@@ -15,6 +15,20 @@ assert.deepEqual(fetched(state({ a: '1', b: '3' }), state({ a: '2', b: '2' })), 
 // Same time, different content (edited before edit times existed): fetch, and the other side fetches ours.
 assert.deepEqual(fetched(state({ a: ['1', 'x'] }), state({ a: ['1', 'y'] })), ['a'])
 assert.deepEqual(fetched(state({ a: ['1', 'y'] }), state({ a: ['1', 'x'] })), ['a'])
+// Deleted here after its last edit there: not fetched back. Edited there after the delete: fetched.
+assert.deepEqual(planSync(state({}), state({ a: '1', b: '3' }), { a: '2', b: '2' }), ['b'])
+// Deleted there after its last edit here: offered for deleting. Edited here since: kept (the other side fetches it).
+assert.deepEqual(planDeletes(state({ a: '1', b: '3' }), { a: '2', b: '2', c: '2' }), ['a'])
+// A pack: eight different cards when there are enough; every card at least once, plus repeats, when there aren't.
+{
+  const many = Array.from({ length: 20 }, (_, i) => `c${i}`)
+  const picked = packIds(many)
+  assert.equal(picked.length, PACK_SIZE)
+  assert.equal(new Set(picked).size, PACK_SIZE)
+  const few = packIds(['a', 'b', 'c'])
+  assert.equal(few.length, PACK_SIZE)
+  assert.deepEqual([...new Set(few)].sort(), ['a', 'b', 'c'])
+}
 // A wiped device gets everything back.
 assert.deepEqual(fetched(state({}), state({ a: '1', b: '2' })), ['a', 'b'])
 

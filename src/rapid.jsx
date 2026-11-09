@@ -2,11 +2,11 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import { normalizeOriginal, saveCard, sideFields, readLastEvent, writeLastEvent } from './db.js'
 import { loadOpenCv, autoCrop, cutOutSticker, scaledCanvas } from './crop.js'
 import { CornerEditor } from './cropper.jsx'
-import { ArmedButton, Beta, CardImage, CollectionPicker } from './ui.jsx'
-import { t } from './i18n.js'
+import { ArmedButton, Beta, CardImage, CollectionPicker, ask, useStoredState } from './ui.jsx'
+import { t, tn } from './i18n.js'
 import { useQrReader, progressText } from './beam.jsx'
 
-const discardPrompt = (count) => (count === 1 ? t('Discard {count} shot?', { count }) : t('Discard {count} shots?', { count }))
+const confirmDiscard = (count) => ask(tn(count, 'Discard {count} shot?', 'Discard {count} shots?'), { confirm: t('Discard'), danger: true })
 
 const SIDE_LABELS = {
   front: { sure: t('front'), unsure: t('front · check') },
@@ -20,12 +20,11 @@ const SIDE_LABELS = {
 // mode: 'cards' or 'stickers', what the camera starts on (the list's tab).
 export function RapidCapture({ events, mode, onDone, onChanged, onCode, setLeaveGuard }) {
   // { front, back } of original photo blobs while shooting; cropped sides after review starts.
-  const [cards, setCards] = useState([])
-  const [reviewing, setReviewing] = useState(false)
-  if (!reviewing) {
-    return <Camera initialMode={mode} onCode={onCode} onFinish={(shot) => { setCards(shot); setReviewing(true) }} onCancel={onDone} setLeaveGuard={setLeaveGuard} />
+  const [shots, setShots] = useState(null)
+  if (!shots) {
+    return <Camera initialMode={mode} onCode={onCode} onFinish={setShots} onCancel={onDone} setLeaveGuard={setLeaveGuard} />
   }
-  return <Review shots={cards} events={events} onDone={onDone} onChanged={onChanged} setLeaveGuard={setLeaveGuard} />
+  return <Review shots={shots} events={events} onDone={onDone} onChanged={onChanged} setLeaveGuard={setLeaveGuard} />
 }
 
 const SHAPE_KEY = 'cameraCardShape'
@@ -47,6 +46,7 @@ export function Camera({ initialMode, single = false, onFinish, onCancel, onCode
   const photosRef = useRef(new Map())
   // A small preview of each shot, made at the tap, for the last-shot thumbnail.
   const thumbnailsRef = useRef(new Map())
+  useEffect(() => () => thumbnailsRef.current.forEach((url) => URL.revokeObjectURL(url)), [])
   const nextIdRef = useRef(1)
   const [processing, setProcessing] = useState(0)
   const [flash, setFlash] = useState(false)
@@ -57,12 +57,8 @@ export function Camera({ initialMode, single = false, onFinish, onCancel, onCode
   const stickers = mode === 'stickers'
   const scanning = mode === 'qr'
   // The card's shape for the guide, chosen with a button rather than by turning the phone; remembered between visits.
-  const [shape, setShape] = useState(() => (localStorage.getItem(SHAPE_KEY) === 'vertical' ? 'vertical' : 'horizontal'))
-  const toggleShape = () => setShape((current) => {
-    const next = current === 'vertical' ? 'horizontal' : 'vertical'
-    localStorage.setItem(SHAPE_KEY, next)
-    return next
-  })
+  const [shape, setShape] = useStoredState(SHAPE_KEY, (stored) => (stored === 'vertical' ? 'vertical' : 'horizontal'))
+  const toggleShape = () => setShape(shape === 'vertical' ? 'horizontal' : 'vertical')
 
   useEffect(() => {
     let cancelled = false
@@ -138,7 +134,7 @@ export function Camera({ initialMode, single = false, onFinish, onCancel, onCode
   const { cards, pendingFront } = shots
   const finished = pendingFront ? [...cards, { front: pendingFront, back: null }] : cards
   useEffect(() => {
-    setLeaveGuard(finished.length ? () => confirm(discardPrompt(finished.length)) : null)
+    setLeaveGuard(finished.length ? () => confirmDiscard(finished.length) : null)
   }, [finished.length])
   const cardNumber = cards.length + 1
 
@@ -283,7 +279,7 @@ function Review({ shots, events, onDone, onChanged, setLeaveGuard }) {
   // Guarded from the start, while photos are still being cropped too.
   const count = cards ? cards.length : shots.length
   useEffect(() => {
-    setLeaveGuard(count ? () => confirm(discardPrompt(count)) : null)
+    setLeaveGuard(count ? () => confirmDiscard(count) : null)
   }, [count])
 
   const update = (index, change) => setCards(cards.map((card, i) => (i === index ? { ...card, ...change } : card)))

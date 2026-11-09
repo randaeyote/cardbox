@@ -1,4 +1,6 @@
+import { render } from 'preact'
 import { useEffect, useRef, useState } from 'preact/hooks'
+import { renderSVG } from 'uqr'
 import { t, language, setLanguage, LANGUAGES } from './i18n.js'
 
 const ARM_CONFIRM_MS = 4000
@@ -14,6 +16,53 @@ export function useObjectUrl(blob) {
   return url
 }
 
+// A preference kept in localStorage: parse turns the stored string (null when unset) into the value; set stores
+// String(value).
+export function useStoredState(key, parse = (stored) => stored) {
+  const [value, setValue] = useState(() => parse(localStorage.getItem(key)))
+  return [value, (next) => { localStorage.setItem(key, String(next)); setValue(next) }]
+}
+
+// For a <dialog> that is open for as long as it's mounted: spread the result on it. Esc and a tap on the backdrop
+// leave through onClose, which removes the dialog, instead of the browser closing it behind the app's back.
+export function useModal(onClose) {
+  const ref = useRef()
+  useEffect(() => { ref.current.showModal() }, [])
+  return { ref, onCancel: (e) => { e.preventDefault(); onClose() }, onClick: (e) => e.target === ref.current && onClose() }
+}
+
+// In place of confirm() and alert(): an alert in the app's own style. Resolves true for the confirm button, false for
+// Cancel or Esc. cancel null: a notice with only the confirm button. danger: the confirm button throws something away.
+export function ask(message, { confirm = t('OK'), cancel = t('Cancel'), danger = false } = {}) {
+  return new Promise((resolve) => {
+    const host = document.body.appendChild(document.createElement('div'))
+    const answer = (value) => { render(null, host); host.remove(); resolve(value) }
+    render(<AskDialog message={message} confirm={confirm} cancel={cancel} danger={danger} onAnswer={answer} />, host)
+  })
+}
+export const notify = (message) => ask(message, { cancel: null })
+
+function AskDialog({ message, confirm, cancel, danger, onAnswer }) {
+  const ref = useRef()
+  useEffect(() => { ref.current.showModal() }, [])
+  return (
+    <dialog ref={ref} class="alert" onCancel={(e) => { e.preventDefault(); onAnswer(false) }}>
+      <h2>{message}</h2>
+      <div class="alert-buttons">
+        {cancel && <button type="button" onClick={() => onAnswer(false)}>{cancel}</button>}
+        <button type="button" class={danger ? 'danger' : 'primary'} onClick={() => onAnswer(true)}>{confirm}</button>
+      </div>
+    </dialog>
+  )
+}
+
+// A copy of the set with id removed, or added if it wasn't there.
+export function toggled(set, id) {
+  const next = new Set(set)
+  if (!next.delete(id)) next.add(id)
+  return next
+}
+
 // A card side's own corners (its edit's measured radius) as a style, or nothing to keep the stylesheet's default.
 // sideways: shown turned a quarter, so its width and height swap.
 export const cornerStyle = (edit, sideways = false) => {
@@ -23,10 +72,14 @@ export const cornerStyle = (edit, sideways = false) => {
   return { borderRadius: `${x * 100}% / ${y * 100}%` }
 }
 
+// A card's front or back corners, but a sticker has none: it's drawn by its outline.
+export const cardCornerStyle = (card, side = 'front') => (card.kind === 'sticker' ? undefined : cornerStyle(card[`${side}Edit`]))
+
 // lazy: for long lists, decoded only as it nears the screen.
 export function CardImage({ blob, className, style, onLoad, lazy = false }) {
   const url = useObjectUrl(blob)
-  return url ? <img class={className} style={style} src={url} alt="" onLoad={onLoad} loading={lazy ? 'lazy' : undefined} decoding={lazy ? 'async' : undefined} /> : <div class={className} style={style} />
+  // Not draggable: the browser's own image drag would fight the list's reordering and fanning.
+  return url ? <img class={className} style={style} src={url} alt="" draggable={false} onLoad={onLoad} loading={lazy ? 'lazy' : undefined} decoding={lazy ? 'async' : undefined} /> : <div class={className} style={style} />
 }
 
 // A danger button that needs a second tap within a few seconds. Used instead of confirm(), which some embedded
@@ -42,10 +95,52 @@ export function ArmedButton({ label, armedLabel, onConfirm, disabled }) {
   return <button type="button" class="danger" disabled={disabled} onClick={tap}>{armed ? armedLabel : label}</button>
 }
 
+// A QR code's link as text; a tap copies it, to paste into a chat instead of scanning. Not a real link: opening it on
+// this same device would pair it with itself.
+export function CopyLink({ link }) {
+  const [copied, setCopied] = useState(false)
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(link)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch {}
+  }
+  // Cut in the middle, so the host and the code's end both show: the first part shrinks with an ellipsis, the tail stays.
+  const shown = link.replace(/^https?:\/\//, '')
+  return (
+    <button type="button" class="qr-link" aria-label={copied ? t('Copied') : t('Copy link')} onClick={copy}>
+      <span class="qr-link-start">{shown.slice(0, -6)}</span>
+      <span>{shown.slice(-6)}</span>
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d={copied ? 'M5 12.5l4.5 4.5L19 7.5' : 'M9 9h10v10H9zM5 15V5h10'} />
+      </svg>
+    </button>
+  )
+}
+
+// A QR code for a link, with the link as text under it. class: the stylesheet's name for the code's box.
+export function QrLink({ link, border, class: className }) {
+  return (
+    <>
+      {/* uqr's own output: a static SVG built from our link, no user content. */}
+      <div class={className} dangerouslySetInnerHTML={{ __html: renderSVG(link, { border }) }} />
+      <CopyLink link={link} />
+    </>
+  )
+}
+
+export const ShareIcon = () => (
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12" /><path d="m7.5 7.5 4.5-4.5 4.5 4.5" /><path d="M8 11H6a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2h-2" /></svg>
+)
+
 export function BackHeader({ title, onBack, children }) {
   return (
     <header class="list-header">
-      <button type="button" class="icon-button" aria-label={t('Back')} onClick={onBack}>‹</button>
+      <button type="button" class="icon-button" aria-label={t('Back')} onClick={onBack}>
+        {/* Drawn, not the ‹ character: its font metrics sit it off-centre. */}
+        <svg class="back-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 6l-6 6 6 6" /></svg>
+      </button>
       <h1>{title}</h1>
       {children}
     </header>
@@ -198,6 +293,7 @@ export const LanguageSwitch = ({ class: className }) => Object.entries(LANGUAGES
   </button>
 ))
 
+// A box with two cards peeking out; stands in for the "Cardbox" title.
 export function Logo() {
   return (
     <svg viewBox="0 0 32 32" role="img" aria-label="Cardbox">

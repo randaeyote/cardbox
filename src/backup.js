@@ -1,5 +1,5 @@
-import JSZip from 'jszip'
 import { IMAGE_FIELDS, listCards, storeCard, setLastBackup } from './db.js'
+import { notify } from './ui.jsx'
 import { t } from './i18n.js'
 
 // Photos are JPEG; sticker cut-outs are PNG, for their transparent background.
@@ -15,6 +15,7 @@ function cardsToManifest(cards) {
 }
 
 export async function exportBackup() {
+  const { default: JSZip } = await import('jszip')
   const cards = await listCards()
   const zip = new JSZip()
   zip.file('cards.json', JSON.stringify(cardsToManifest(cards), null, 2))
@@ -30,6 +31,7 @@ export async function exportBackup() {
 
 // Returns the ids stored. onCard(done, total) reports progress, since saving a big backup's photos takes a while on a phone.
 export async function importBackup(file, onCard = () => {}) {
+  const { default: JSZip } = await import('jszip')
   const zip = await JSZip.loadAsync(file)
   const manifestEntry = zip.file('cards.json')
   if (!manifestEntry) throw new Error(t('Not a Cardbox backup (cards.json missing)'))
@@ -59,7 +61,7 @@ function downloadBlob(blob, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 10000)
 }
 
-export async function shareOrDownload(file) {
+async function shareOrDownload(file) {
   if (!navigator.canShare?.({ files: [file] })) return downloadBlob(file, file.name)
   try {
     await navigator.share({ files: [file] })
@@ -71,4 +73,4 @@ export async function shareOrDownload(file) {
 }
 
 export const shareFile = (file) =>
-  shareOrDownload(file).catch((error) => error.name !== 'AbortError' && alert(error.message))
+  shareOrDownload(file).catch((error) => error.name !== 'AbortError' && notify(error.message))

@@ -1,5 +1,5 @@
 import { get, set, del, delMany, keys, getMany } from 'idb-keyval'
-import { scaledCanvas, canvasToWebp, canvasToJpeg, measureCorners } from './crop.js'
+import { decodeScaled, canvasToWebp, canvasToJpeg, measureCorners } from './crop.js'
 
 // The stored original that crops are re-rendered from. Large enough to keep detail for a 2400px crop, small enough
 // that two per card don't bloat storage and backups. Also keeps under iOS's ~16.7 MP canvas limit.
@@ -46,10 +46,15 @@ export async function getCard(id) {
   const card = await get(`card:${id}`)
   return card && migrateCard(card)
 }
+// The cards that still exist, in order.
+export const getCards = async (ids) => (await Promise.all(ids.map(getCard))).filter(Boolean)
+
+const keysWithPrefix = async (prefix) => (await keys()).filter((key) => String(key).startsWith(prefix))
+const cardIds = async () => (await keysWithPrefix('card:')).map((key) => String(key).slice('card:'.length))
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 export async function listCards() {
-  const cardKeys = (await keys()).filter((key) => String(key).startsWith('card:'))
-  const stored = await getMany(cardKeys)
+  const stored = await getMany(await keysWithPrefix('card:'))
   const cards = stored.map(migrateCard)
   const migrated = cards.filter((card, index) => card !== stored[index])
   if (migrated.length) await storeCards(migrated)
@@ -80,9 +85,13 @@ const STORAGE_CHECK_MS = 3000
 export const cardTime = (card) => card.updatedAt ?? card.createdAt
 
 // As-is, keeping updatedAt: for sync, import and migration, which must not make a card look freshly edited.
-export const storeCard = async (card) => set(`card:${card.id}`, await withFreshImages(card))
+// A card stored here again (synced back, imported, received) is no longer deleted here.
+export async function storeCard(card) {
+  await set(`card:${card.id}`, await withFreshImages(card))
+  await del(`deleted:${card.id}`)
+}
 // One card at a time, so a big batch holds only one card's photos in memory at once.
-export async function storeCards(cards) {
+async function storeCards(cards) {
   for (const card of cards) await storeCard(card)
 }
 // A user's edit: stamped so sync knows it's the newest version.
@@ -92,8 +101,20 @@ export async function saveCards(cards) {
   await storeCards(cards.map((card) => ({ ...card, updatedAt: now })))
 }
 
-export const deleteCard = (id) => delMany([`card:${id}`, `thumb:${id}:front`, `thumb:${id}:back`])
-export const deleteAllCards = async () => delMany((await keys()).filter((key) => /^(card|thumb):/.test(String(key))))
+// A deleted card leaves a note of when, so sync can offer the delete to the other device instead of fetching the card
+// back from it.
+export async function deleteCard(id) {
+  await delMany([`card:${id}`, `thumb:${id}:front`, `thumb:${id}:back`])
+  await set(`deleted:${id}`, new Date().toISOString())
+}
+// Starting this device over: no notes, so a sync afterwards refills it rather than offering deletes elsewhere.
+export const deleteAllCards = async () => delMany((await keys()).filter((key) => /^(card|thumb|deleted):/.test(String(key))))
+// { [id]: ISO time } for the cards deleted here.
+export async function listDeleted() {
+  const noteKeys = await keysWithPrefix('deleted:')
+  const times = await getMany(noteKeys)
+  return Object.fromEntries(noteKeys.map((key, index) => [String(key).slice('deleted:'.length), times[index]]))
+}
 
 // List tiles show small copies of each side: decoding hundreds of full-size photos at once is what makes a big
 // collection slow and, on iOS, reloads the page. Long side to stay sharp in a 240px tile on a 2x screen.
@@ -110,12 +131,10 @@ export async function thumbnailFor(id, side, photo, transparent) {
   const stored = await get(key)
   if (stored?.source === source) return stored.blob
   const made = thumbnailQueue.then(async () => {
-    const bitmap = await createImageBitmap(photo)
-    const canvas = scaledCanvas(bitmap, THUMBNAIL_DIMENSION)
+    const canvas = await decodeScaled(photo, THUMBNAIL_DIMENSION)
     // JPEG for cards: every phone encodes it natively and fast, where WebP on iOS goes through the slower WASM encoder.
     // Stickers need their transparency, so they stay WebP.
     const blob = await (transparent ? canvasToWebp(canvas, { quality: 0.8, transparent }) : canvasToJpeg(canvas, 0.8))
-    bitmap.close?.()
     await set(key, { source, blob })
     return blob
   })
@@ -134,17 +153,13 @@ const CONVERT_PAUSE_MS = 300
 // onCard runs after each card is converted. Returns how many cards changed.
 export async function convertPhotosToWebp(onCard) {
   let changed = 0
-  const ids = (await keys()).filter((key) => String(key).startsWith('card:')).map((key) => String(key).slice('card:'.length))
-  for (const id of ids) {
+  for (const id of await cardIds()) {
     const card = await getCard(id)
     const fields = IMAGE_FIELDS.filter((field) => card?.[field] instanceof Blob && card[field].type !== 'image/webp')
     if (!fields.length) continue
     const converted = {}
     for (const field of fields) {
-      const bitmap = await createImageBitmap(card[field])
-      const canvas = scaledCanvas(bitmap)
-      bitmap.close?.()
-      const webp = await canvasToWebp(canvas, { transparent: card[field].type === 'image/png' })
+      const webp = await canvasToWebp(await decodeScaled(card[field]), { transparent: card[field].type === 'image/png' })
       if (webp.type !== 'image/webp') return changed
       converted[field] = webp
     }
@@ -155,7 +170,7 @@ export async function convertPhotosToWebp(onCard) {
     await storeCard(current)
     changed++
     await onCard?.()
-    await new Promise((resolve) => setTimeout(resolve, CONVERT_PAUSE_MS))
+    await pause(CONVERT_PAUSE_MS)
   }
   return changed
 }
@@ -164,8 +179,7 @@ export async function convertPhotosToWebp(onCard) {
 // saved photo. In the background like convertPhotosToWebp, and keeps updatedAt the same way.
 export async function measureOldCorners(onCard) {
   const unmeasured = (card, name) => card?.kind !== 'sticker' && card?.[name] && card[`${name}Edit`]?.corners && !('radius' in card[`${name}Edit`])
-  const ids = (await keys()).filter((key) => String(key).startsWith('card:')).map((key) => String(key).slice('card:'.length))
-  for (const id of ids) {
+  for (const id of await cardIds()) {
     const card = await getCard(id)
     const names = ['front', 'back'].filter((name) => unmeasured(card, name))
     if (!names.length) continue
@@ -183,16 +197,13 @@ export async function measureOldCorners(onCard) {
     }
     await storeCard(current)
     await onCard?.()
-    await new Promise((resolve) => setTimeout(resolve, CONVERT_PAUSE_MS))
+    await pause(CONVERT_PAUSE_MS)
   }
 }
 
 // source: a Blob or canvas.
 export async function normalizeOriginal(source) {
-  const bitmap = await createImageBitmap(source, { imageOrientation: 'from-image' })
-  const canvas = scaledCanvas(bitmap, MAX_ORIGINAL_DIMENSION)
-  bitmap.close?.()
-  return canvasToWebp(canvas)
+  return canvasToWebp(await decodeScaled(source, MAX_ORIGINAL_DIMENSION, { imageOrientation: 'from-image' }))
 }
 
 const EVENT_KEY = 'cardbox:lastEvent'

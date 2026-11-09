@@ -1,4 +1,4 @@
-import { scaledCanvas } from './crop.js'
+import { decodeScaled, perspectiveWarp } from './crop.js'
 const COLLAGE_SIZE = 2800
 export const DEFAULT_FILL = '#1b1b1e'
 // Cards are sized so that together they cover about 0.8× the photo's area. Tuned by measuring piles of 6–100 cards:
@@ -28,7 +28,8 @@ export const MAX_TILT_LIMIT = 35
 // Card thumbnails are cached at this long side; plenty for a card drawn a few hundred pixels across.
 const THUMBNAIL_DIMENSION = 700
 
-// Small deterministic generator, so Shuffle can re-roll by changing the seed and a layout can be reproduced.
+// Small deterministic generator (mulberry32), so Shuffle can re-roll by changing the seed and a layout can be
+// reproduced. Beam derives each frame's block choices from it too, so what it returns for a seed is a wire format.
 export function seededRandom(seed) {
   let state = seed >>> 0
   return () => {
@@ -240,7 +241,7 @@ function carve(free, used, smallest) {
 export const reach = (card, ux, uy) =>
   Math.abs(ux * card.cos + uy * card.sin) * card.halfWidth + Math.abs(-ux * card.sin + uy * card.cos) * card.halfHeight
 
-function shuffle(items, random) {
+export function shuffle(items, random) {
   for (let i = items.length - 1; i > 0; i--) {
     const j = Math.floor(random() * (i + 1))
     ;[items[i], items[j]] = [items[j], items[i]]
@@ -248,14 +249,21 @@ function shuffle(items, random) {
   return items
 }
 
+// Repeats items until there are `count`, as evenly as possible: each one the same number of times, with the
+// remainder going to a random few (by `random`, so a shuffle changes which). Fewer than the items: all of them, once.
+export function repeatItems(items, count, random) {
+  if (count <= items.length) return items
+  const rounds = Math.floor(count / items.length)
+  const extra = shuffle([...items], random).slice(0, count % items.length)
+  return [...Array.from({ length: rounds }, () => items).flat(), ...extra]
+}
+
 // Decodes each given image (fronts and backs alike) once at a modest size, so re-shuffling doesn't re-decode full photos and a big haul
 // doesn't hold dozens of full-size images in memory at once.
 export async function loadThumbnails(blobs) {
   const thumbnails = []
   for (const blob of blobs) {
-    const bitmap = await createImageBitmap(blob)
-    thumbnails.push(scaledCanvas(bitmap, THUMBNAIL_DIMENSION))
-    bitmap.close?.()
+    thumbnails.push(await decodeScaled(blob, THUMBNAIL_DIMENSION))
   }
   return thumbnails
 }
@@ -375,7 +383,8 @@ export function drawCards(items, seed, aspect = 1, options = {}) {
 }
 
 // fill: the background colour, or null for see-through; background: a photo instead, cropped to fill.
-export function composeCollage(canvas, layer, { fill = DEFAULT_FILL, background = null } = {}) {
+// offset: where the cards sit, as a share of the canvas's width and height from the centre.
+export function composeCollage(canvas, layer, { fill = DEFAULT_FILL, background = null, offset = { x: 0, y: 0 } } = {}) {
   canvas.width = layer.width
   canvas.height = layer.height
   const context = canvas.getContext('2d')
@@ -386,26 +395,12 @@ export function composeCollage(canvas, layer, { fill = DEFAULT_FILL, background 
     context.fillStyle = fill
     context.fillRect(0, 0, canvas.width, canvas.height)
   }
-  context.drawImage(layer, 0, 0)
+  context.drawImage(layer, offset.x * canvas.width, offset.y * canvas.height)
 }
 
 // corners: top-left, top-right, bottom-right, bottom-left, as shares of the image, to tip the cards onto so they lie
 // on a table in the background photo.
 export function warpLayer(cv, layer, corners) {
   const { width, height } = layer
-  const mats = []
-  const track = (mat) => (mats.push(mat), mat)
-  try {
-    const input = track(cv.imread(layer))
-    const from = track(cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, width, 0, width, height, 0, height]))
-    const to = track(cv.matFromArray(4, 1, cv.CV_32FC2, corners.flatMap(({ x, y }) => [x * width, y * height])))
-    const transform = track(cv.getPerspectiveTransform(from, to))
-    const output = track(new cv.Mat())
-    cv.warpPerspective(input, output, transform, new cv.Size(width, height), cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar(0, 0, 0, 0))
-    const out = document.createElement('canvas')
-    cv.imshow(out, output)
-    return out
-  } finally {
-    mats.forEach((mat) => mat.delete())
-  }
+  return perspectiveWarp(cv, layer, [0, 0, width, 0, width, height, 0, height], corners.flatMap(({ x, y }) => [x * width, y * height]), width, height, cv.BORDER_CONSTANT, new cv.Scalar(0, 0, 0, 0))
 }

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { scatterLayout, tidyLayout, seededRandom, reach, collageItems } from './collage.js'
+import { scatterLayout, tidyLayout, seededRandom, reach, collageItems, repeatItems } from './collage.js'
 
 const SIZE = 2800
 // The short side of a 9:16 image.
@@ -117,4 +117,14 @@ for (const [count, width, height] of [[1, SIZE, SIZE], [6, SIZE, SIZE], [23, NAR
   const covered = boxes.reduce((sum, { w, h }) => sum + 4 * w * h, 0) / (width * height)
   if (count >= 23) assert.ok(covered >= 0.7, `tidy covers only ${Math.round(covered * 100)}% with ${count} cards`)
   console.log(`  tidy ${count} items ${width}×${height}: ${Math.round(covered * 100)}% covered`)
+}
+
+// Repeating: exactly the count asked for, each item within one of every other's tally; never fewer than the items.
+{
+  const items = ['a', 'b', 'c', 'd', 'e', 'f', 'g']
+  const repeated = repeatItems(items, 100, seededRandom(1))
+  assert.equal(repeated.length, 100)
+  const tallies = items.map((item) => repeated.filter((each) => each === item).length)
+  assert.ok(Math.max(...tallies) - Math.min(...tallies) <= 1, `uneven: ${tallies}`)
+  assert.deepEqual(repeatItems(items, 3, seededRandom(1)), items)
 }

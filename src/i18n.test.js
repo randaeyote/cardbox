@@ -8,6 +8,7 @@ const keys = new Set()
 for (const file of readdirSync(directory).filter((name) => /\.jsx?$/.test(name) && !name.includes('.test.') && !['i18n.js', 'zh-Hant.js'].includes(name))) {
   const source = readFileSync(new URL(file, directory), 'utf8')
   for (const [, key] of source.matchAll(/\bt\('((?:[^'\\]|\\.)*)'/g)) keys.add(key.replace(/\\'/g, "'"))
+  for (const [, one, many] of source.matchAll(/\btn\(\s*[\w.]+,\s*'((?:[^'\\]|\\.)*)',\s*'((?:[^'\\]|\\.)*)'/g)) for (const key of [one, many]) keys.add(key.replace(/\\'/g, "'"))
   assert.ok(!/\bt\((?!')/.test(source.replace(/\bt\('(?:[^'\\]|\\.)*'/g, '')), `${file}: t() must be called with a string literal`)
 }
 const missing = [...keys].filter((key) => !(key in zhHant))

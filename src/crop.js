@@ -36,6 +36,16 @@ export function orderCorners(points) {
   ]
 }
 
+// Runs fn(track), where track(mat) returns the mat and frees it when fn finishes, however it finishes.
+export function withMats(fn) {
+  const mats = []
+  try {
+    return fn((mat) => (mats.push(mat), mat))
+  } finally {
+    mats.forEach((mat) => mat.delete())
+  }
+}
+
 const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y)
 
 export function outputSize([topLeft, topRight, bottomRight, bottomLeft]) {
@@ -53,9 +63,7 @@ export function detectCorners(cv, source) {
   const small = scaledCanvas(source, DETECTION_DIMENSION)
   const { width, height } = small
 
-  const mats = []
-  const track = (mat) => (mats.push(mat), mat)
-  try {
+  return withMats((track) => {
     const rgb = track(new cv.Mat())
     cv.cvtColor(track(cv.imread(small)), rgb, cv.COLOR_RGBA2RGB)
     const lab = track(new cv.Mat())
@@ -134,9 +142,7 @@ export function detectCorners(cv, source) {
     if (!found) return null
     const quad = found.quad.map(({ x, y }) => ({ x: x / scale, y: y / scale }))
     return refineOnSource(source, quad, Math.ceil(REFINE_SEARCH_DETECTION_PIXELS / scale))
-  } finally {
-    mats.forEach((mat) => mat.delete())
-  }
+  })
 }
 
 const degrees = (value) => (value * Math.PI) / 180
@@ -386,21 +392,21 @@ const polygonArea = (points) =>
 // Without corners the whole photo is used, only downscaled to the output cap.
 export function warpCard(cv, source, corners) {
   if (!corners) return scaledCanvas(source, MAX_OUTPUT_DIMENSION)
-  const canvas = document.createElement('canvas')
   const { width, height } = outputSize(corners)
-  const mats = []
-  const track = (mat) => (mats.push(mat), mat)
-  try {
+  return perspectiveWarp(cv, source, corners.flatMap(({ x, y }) => [x, y]), [0, 0, width, 0, width, height, 0, height], width, height, cv.BORDER_REPLICATE)
+}
+
+// Maps the quad `from` onto the quad `to` (each as 8 flat coordinates) in a width × height canvas. border: the
+// remaining warpPerspective arguments, for what fills outside the source.
+export function perspectiveWarp(cv, source, from, to, width, height, ...border) {
+  const canvas = document.createElement('canvas')
+  withMats((track) => {
     const input = track(cv.imread(source))
-    const from = track(cv.matFromArray(4, 1, cv.CV_32FC2, corners.flatMap(({ x, y }) => [x, y])))
-    const to = track(cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, width, 0, width, height, 0, height]))
-    const transform = track(cv.getPerspectiveTransform(from, to))
+    const transform = track(cv.getPerspectiveTransform(track(cv.matFromArray(4, 1, cv.CV_32FC2, from)), track(cv.matFromArray(4, 1, cv.CV_32FC2, to))))
     const output = track(new cv.Mat())
-    cv.warpPerspective(input, output, transform, new cv.Size(width, height), cv.INTER_LINEAR, cv.BORDER_REPLICATE)
+    cv.warpPerspective(input, output, transform, new cv.Size(width, height), cv.INTER_LINEAR, ...border)
     cv.imshow(canvas, output)
-  } finally {
-    mats.forEach((mat) => mat.delete())
-  }
+  })
   return canvas
 }
 
@@ -434,7 +440,7 @@ export function enhancePixels(data, amount = 1) {
 }
 
 // Applied to new crops; the slider can change it afterwards.
-export const DEFAULT_ENHANCE = 0.5
+const DEFAULT_ENHANCE = 0.5
 export const DEFAULT_ADJUSTMENT = { rotation: 0, enhance: DEFAULT_ENHANCE }
 
 // rotation is clockwise degrees: 0, 90, 180 or 270.
@@ -506,9 +512,7 @@ export function measureCorners(canvas) {
 
 // Crops a photo with no editor step: detected corners if found, else the whole photo. `detected` flags which.
 export async function autoCrop(cv, original) {
-  const bitmap = await createImageBitmap(original)
-  const source = scaledCanvas(bitmap)
-  bitmap.close?.()
+  const source = await decodeScaled(original)
   let corners = null
   try {
     corners = detectCorners(cv, source)
@@ -599,9 +603,7 @@ function stickerSources(original) {
 // area and removed are in `full`'s pixels; small is `full` scaled down for GrabCut. Returns { mask: alpha per pixel of
 // bounds, bounds: the sticker's box in `full` with a little margin } or null.
 function findStickerOutline(cv, full, small, area, removed, rounds) {
-  const mats = []
-  const track = (mat) => (mats.push(mat), mat)
-  try {
+  return withMats((track) => {
     const rgba = track(cv.imread(small))
     const rgb = track(new cv.Mat())
     cv.cvtColor(rgba, rgb, cv.COLOR_RGBA2RGB)
@@ -681,9 +683,7 @@ function findStickerOutline(cv, full, small, area, removed, rounds) {
     } finally {
       contours.delete()
     }
-  } finally {
-    mats.forEach((mat) => mat.delete())
-  }
+  })
 }
 
 const encode = (canvas, type, quality) =>
@@ -692,11 +692,11 @@ const encode = (canvas, type, quality) =>
   )
 export const canvasToJpeg = (canvas, quality = 0.9) => encode(canvas, 'image/jpeg', quality)
 // Keeps transparency, for cut-out stickers.
-export const canvasToPng = (canvas) => encode(canvas, 'image/png')
+const canvasToPng = (canvas) => encode(canvas, 'image/png')
 
 // Stored photos are WebP at this quality: on card photos it looks the same as the JPEGs it replaced at about a
 // quarter of the size.
-export const WEBP_QUALITY = 0.85
+const WEBP_QUALITY = 0.85
 let nativeWebp
 const canEncodeWebp = () => (nativeWebp ??= new Promise((resolve) => {
   const canvas = document.createElement('canvas')
@@ -742,6 +742,14 @@ export async function canvasToWebp(canvas, { quality = WEBP_QUALITY, transparent
     console.warn('WebP encoding failed', error)
     return transparent ? canvasToPng(canvas) : canvasToJpeg(canvas)
   }
+}
+
+// Decodes a Blob (options: createImageBitmap's) into a canvas no larger than max, freeing the bitmap.
+export async function decodeScaled(blob, max, options) {
+  const bitmap = await createImageBitmap(blob, options)
+  const canvas = scaledCanvas(bitmap, max)
+  bitmap.close?.()
+  return canvas
 }
 
 // source: anything drawable with a width and height. Only ever shrinks.

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { t } from './i18n.js'
-import { CardImage, Logo, cornerStyle } from './ui.jsx'
+import { CardImage, Logo, cardCornerStyle } from './ui.jsx'
 import { DEFAULT_STICKER_SIZE } from './collage.js'
 import { Card3D } from './card3d.jsx'
 
@@ -22,13 +22,13 @@ const TEAR_MS = 1000
 const FLICK_MS = 320
 // Matches .pack-grid's gap.
 const GRID_GAP = 12
-// A sticker's long side as a share of a card's, as in collages, so it isn't shown card-sized.
 // When the summary appears, the cards flip to their backs one after another, then, a moment after the last is over, back again.
 // FLIP_MS matches Card3D's.
 const FLIP_START_MS = 350
 const FLIP_STAGGER_MS = 150
 const FLIP_MS = 800
 const FLIP_PAUSE_MS = 200
+// A sticker's long side as a share of a card's, as in collages, so it isn't shown card-sized.
 const scaleOf = (card) => (card.kind === 'sticker' ? card.size ?? DEFAULT_STICKER_SIZE : 1)
 
 // A sealed foil pack holding newly added cards: slide a finger along its top to tear it open, then flick through the
@@ -46,16 +46,20 @@ export function PackOpening({ cards, name, onDone }) {
   const startRef = useRef(null)
   const [index, setIndex] = useState(0)
   // Ids of the landscape cards. In the pack every card lies upright, as it would in a real one; a landscape card turns
-  // round once it's on top of the stack. Measured up front, while the pack is still sealed: measuring as each card
+  // round once it's on top of the stack. Stickers have no upright: they stay as they are. Measured up front, while the pack is still sealed: measuring as each card
   // joins the stack showed it turning upright behind the top card.
   const [landscape, setLandscape] = useState(() => new Set())
   useEffect(() => {
-    Promise.all(cards.map(async (card) => {
-      const bitmap = await createImageBitmap(card.front)
-      const wide = bitmap.width > bitmap.height
-      bitmap.close?.()
-      return wide && card.id
-    })).then((ids) => setLandscape(new Set(ids.filter(Boolean))), () => {})
+    // One photo at a time, so a big pack never holds all its full-size decodes at once.
+    ;(async () => {
+      const wide = new Set()
+      for (const card of cards.filter((other) => other.kind !== 'sticker')) {
+        const bitmap = await createImageBitmap(card.front)
+        if (bitmap.width > bitmap.height) wide.add(card.id)
+        bitmap.close?.()
+      }
+      setLandscape(wide)
+    })().catch(() => {})
   }, [])
   // The stack's current tilt in degrees, and whether a finger is on it (no easing while it follows the finger).
   const [tilt, setTilt] = useState(REST_TILT)
@@ -90,8 +94,8 @@ export function PackOpening({ cards, name, onDone }) {
   function stackMove(event) {
     if (!startRef.current) return
     setTilt({
-      x: clampTilt(REST_TILT.x - (event.clientY - startRef.current.y) * TILT_PER_PIXEL),
-      y: clampTilt(REST_TILT.y + (event.clientX - startRef.current.x) * TILT_PER_PIXEL),
+      x: clampTilt((startRef.current.y - event.clientY) * TILT_PER_PIXEL),
+      y: clampTilt((event.clientX - startRef.current.x) * TILT_PER_PIXEL),
     })
   }
   function stackUp(event) {
@@ -126,7 +130,7 @@ export function PackOpening({ cards, name, onDone }) {
     return () => observer.disconnect()
   }, [stage])
 
-  const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches
+  const [reduceMotion] = useState(() => matchMedia('(prefers-reduced-motion: reduce)').matches)
   // Stickers come last and don't flip, so the last card to flip is the last one with a back.
   const flipBackAt = FLIP_START_MS + ordered.findLastIndex((card) => card.back) * FLIP_STAGGER_MS + FLIP_MS + FLIP_PAUSE_MS
   const finish = () => { dialogRef.current.close(); onDone() }
@@ -156,13 +160,15 @@ export function PackOpening({ cards, name, onDone }) {
               {/* The cards still to come, a few px apart in depth, so the stack's edge shows when it's tilted. */}
               {ordered.slice(index, index + STACK_SHOWN).reverse().map((card, place, shown) => {
                 const depth = shown.length - 1 - place
+                // The next card turns round as the top one flies off, not once it's gone.
+                const onTop = stage === 'revealing' && (depth === 0 || (depth === 1 && flick))
                 return (
                   <div
                     key={card.id}
-                    class={`pack-card${card.kind === 'sticker' ? ' sticker' : ''}${landscape.has(card.id) && !(depth === 0 && stage === 'revealing') ? ' upright' : ''}${depth === 0 && flick ? ` gone-${flick}` : ''}`}
+                    class={`pack-card${card.kind === 'sticker' ? ' sticker' : ''}${landscape.has(card.id) && !onTop ? ' upright' : ''}${depth === 0 && flick ? ` gone-${flick}` : ''}`}
                     style={{ '--depth': depth, '--size': scaleOf(card) }}
                   >
-                    <CardImage blob={card.front} style={card.kind === 'sticker' ? undefined : cornerStyle(card.frontEdit)} />
+                    <CardImage blob={card.front} style={cardCornerStyle(card)} />
                   </div>
                 )
               })}

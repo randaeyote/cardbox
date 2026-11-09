@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { renderSVG } from 'uqr'
 import { t } from './i18n.js'
-import { BackHeader } from './ui.jsx'
+import { useUnsavedWork } from './update.js'
+import { BackHeader, QrLink, useStoredState } from './ui.jsx'
 import { errorMessage } from './sync.jsx'
 import { packCard, unpackCard, frameStream, frameCollector } from './beam.js'
-import { newPairing, parsePairing, parseReceiveLink, parseSyncLink, receiveLink, startSync } from './sync.js'
-import { saveCard } from './db.js'
+import { forgetShown, rememberShown, newPairing, parsePairing, parseReceiveLink, parseSyncLink, receiveLink, startSync, packIds, PACK_SIZE } from './sync.js'
+import { PackOpening } from './pack.jsx'
+import { saveCard, getCards } from './db.js'
 
 // How long each QR code stays up (about 7 a second). Any frames will do, so showing them faster than the receiver
 // reads costs nothing; the limit is the camera catching two codes blended mid-switch, which grows below ~100 ms.
@@ -18,17 +20,27 @@ const METHOD_KEY = 'beamMethod'
 // Hands one card to another phone, two ways: offline, as a stream of QR codes; or over the network, as a QR link the
 // other phone scans, then sends the card in full (originals too) over the same direct connection as sync.
 export function BeamSend({ card, onClose }) {
-  const [method, setMethod] = useState(() => (localStorage.getItem(METHOD_KEY) === 'network' ? 'network' : 'offline'))
-  const choose = (next) => { localStorage.setItem(METHOD_KEY, next); setMethod(next) }
+  const [method, setMethod] = useStoredState(METHOD_KEY, (stored) => (stored === 'network' ? 'network' : 'offline'))
   return (
     <main class="beam">
       <BackHeader title={t('Beam by QR')} onBack={onClose} />
       <div class="segmented" role="radiogroup" aria-label={t('Send by')}>
         {[['offline', t('Offline')], ['network', t('Network')]].map(([value, label]) => (
-          <button type="button" key={value} role="radio" aria-checked={method === value} onClick={() => choose(value)}>{label}</button>
+          <button type="button" key={value} role="radio" aria-checked={method === value} onClick={() => setMethod(value)}>{label}</button>
         ))}
       </div>
-      {method === 'offline' ? <OfflineSend card={card} /> : <NetworkSend card={card} />}
+      {method === 'offline' ? <OfflineSend card={card} /> : <NetworkSend ids={[card.id]} />}
+    </main>
+  )
+}
+
+// A send screen brought back by the app after the page was cleared from memory (see rememberShown).
+export function ResumedSend({ shown, onClose }) {
+  if (shown.pack) return <PackSend cards={[]} name={shown.pack.name} resumed={shown} onClose={onClose} />
+  return (
+    <main class="beam">
+      <BackHeader title={t('Beam by QR')} onBack={onClose} />
+      <NetworkSend ids={shown.ids} resumed={shown.pairing} />
     </main>
   )
 }
@@ -59,30 +71,47 @@ function OfflineSend({ card }) {
       {!code && !error && <p class="muted">{t('Preparing…')}</p>}
       {error && <p class="cropper-error">{error}</p>}
       {code && <p class="beam-estimate">{t('{parts} parts · about {seconds} s to receive', estimate)}</p>}
-      {code && <p class="muted">{t('On the other phone, open Cardbox → Settings → Scan QR code and point it at this screen. Turn your brightness up.')}</p>}
+      {code && <p class="muted">{t('On the other phone, open Cardbox’s camera, switch to QR and point it at this screen. Turn your brightness up.')}</p>}
     </>
   )
 }
 
-// A one-time QR link; the phone that opens it receives this card, in full, over a direct connection. Only this card
-// is offered, and nothing is taken back.
-function NetworkSend({ card }) {
+// A pack of random cards from a collection, sent like one card over the network; the other phone opens it as a pack.
+// Picked once here and never shown, so it's a surprise for both.
+// resumed: the remembered screen (see rememberShown), reopened after the page was cleared from memory.
+export function PackSend({ cards, name, onClose, resumed }) {
+  const [pack] = useState(() => resumed?.pack ?? { name, ids: packIds(cards.map((card) => card.id)) })
+  return (
+    <main class="beam">
+      <BackHeader title={t('Send a pack')} onBack={onClose} />
+      <p class="muted">{t('{count} random cards from {name}, sealed in a pack for the other phone to open.', { count: PACK_SIZE, name })}</p>
+      <NetworkSend ids={[...new Set(pack.ids)]} pack={pack} resumed={resumed?.pairing} />
+    </main>
+  )
+}
+
+// A one-time QR link; the phone that opens it receives these cards (and pack, if any; see startSync), in full, over a
+// direct connection. Only they are offered, and nothing is taken back.
+function NetworkSend({ ids, pack = null, resumed = null }) {
   // waiting | sending | sent | error
   const [stage, setStage] = useState('waiting')
   const [pairing, setPairing] = useState(null)
   const [error, setError] = useState(null)
 
+  useUnsavedWork()
   useEffect(() => {
     let session
     let stopped = false
-    async function host(sessionPairing) {
+    async function host(sessionPairing, resume = false) {
       setPairing(sessionPairing)
+      rememberShown({ kind: 'send', pairing: sessionPairing, ids, pack })
       try {
         session = await startSync({
-          role: 'host', pairing: sessionPairing, offer: [card.id], fetch: false,
-          onStatus: (status) => status === 'syncing' && setStage('sending'), onProgress: () => {},
+          role: 'host', pairing: sessionPairing, offer: ids, fetch: false, pack, resume,
+          onStatus: (status) => status === 'syncing' && setStage('sending'),
         })
         await session.done
+        forgetShown()
         if (!stopped) setStage('sent')
       } catch (failure) {
         if (stopped) return
@@ -92,16 +121,16 @@ function NetworkSend({ card }) {
         setStage('error')
       }
     }
-    host(newPairing())
-    return () => { stopped = true; session?.close() }
+    if (resumed) host(resumed, true)
+    else host(newPairing())
+    return () => { stopped = true; session?.close(); forgetShown() }
   }, [])
 
   return (
     <>
       {stage === 'waiting' && pairing && (
         <>
-          {/* uqr's own output: a static SVG built from our link, no user content. */}
-          <div class="beam-qr" dangerouslySetInnerHTML={{ __html: renderSVG(receiveLink(pairing), { border: 4 }) }} />
+          <QrLink class="beam-qr" link={receiveLink(pairing)} border={4} />
           <p class="muted">{t('Scan with the other phone’s camera, or Cardbox’s camera in QR mode. Both phones need internet.')}</p>
         </>
       )}
@@ -152,25 +181,31 @@ export function useQrReader({ onSyncLink, onReceiveLink, onCard }) {
     }
     return true
   }
-  return { read, progress, error, setError }
+  return { read, progress, error }
 }
 
 export const progressText = (progress) => [t('Receiving…'), `${progress.percent}%`, progress.secondsLeft !== null && t('about {seconds} s left', { seconds: progress.secondsLeft })]
   .filter(Boolean).join(' · ')
 
 // Opened from a receive link (the part after '#receive/', scanned with any camera): fetches the card over the network,
-// then onDone(id) opens it.
-export function BeamReceive({ code, onDone, onClose }) {
+// then onDone(id) opens it. A pack opens here instead, then onPackDone().
+export function BeamReceive({ code, onDone, onPackDone, onClose }) {
   const pairing = parsePairing(code)
   const [error, setError] = useState(pairing ? null : t('This link isn’t a Cardbox card.'))
+  const [pack, setPack] = useState(null)
   useEffect(() => {
     if (!pairing) return
     let session
     ;(async () => {
       try {
-        session = await startSync({ role: 'guest', pairing, offer: [], onStatus: () => {}, onProgress: () => {} })
-        const { ids } = await session.done
-        if (ids[0]) onDone(ids[0])
+        session = await startSync({ role: 'guest', pairing, offer: [] })
+        const { ids, pack: sent } = await session.done
+        if (sent) {
+          // Cards already here weren't sent again, so each is read from storage; a repeat gets its own id, as the
+          // pack shows every card by id.
+          const cards = await getCards(sent.ids)
+          setPack({ name: sent.name, cards: cards.map((card, place) => ({ ...card, id: `${card.id}:${place}` })) })
+        } else if (ids[0]) onDone(ids[0])
         else setError(t('You already have this card.'))
       } catch (failure) {
         setError(errorMessage(failure))
@@ -179,6 +214,7 @@ export function BeamReceive({ code, onDone, onClose }) {
     return () => session?.close()
   }, [])
 
+  if (pack) return <PackOpening cards={pack.cards} name={pack.name} onDone={onPackDone} />
   return (
     <main class="beam">
       <BackHeader title={t('Receiving…')} onBack={onClose} />
