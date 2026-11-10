@@ -21,7 +21,7 @@ export default defineConfig({
   plugins: [
     preact(),
     VitePWA({
-      registerType: 'autoUpdate',
+      registerType: 'prompt',
       workbox: {
         // .wasm too: the QR reader and WebP encoder, so scanning, beaming and saving photos work offline.
         globPatterns: ['**/*.{js,css,html,wasm}'],

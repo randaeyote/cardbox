@@ -3,10 +3,10 @@ import { t, tn, language, setLanguage, LANGUAGES } from './i18n.js'
 import {
   canStorePhotos, getCards,
   listCards, saveCard, saveCards, deleteCard, deleteAllCards, getLastBackup, compareInGroup, sideOf, sideFields,
-  convertPhotosToWebp, measureOldCorners, IMAGE_FIELDS, thumbnailFor,
+  convertPhotosToWebp, measureOldCorners, removeOriginals, IMAGE_FIELDS, thumbnailFor,
 } from './db.js'
 import { exportBackup, importBackup, shareFile } from './backup.js'
-import { setUnsavedWork } from './update.js'
+import { reloadApp, setUnsavedWork } from './update.js'
 import { PackOpening } from './pack.jsx'
 import { CornerEditor } from './cropper.jsx'
 import { loadOpenCv, cutOutSticker } from './crop.js'
@@ -16,10 +16,11 @@ import { RapidCapture, Camera } from './rapid.jsx'
 import { BeamSend, BeamReceive, PackSend, ResumedSend } from './beam.jsx'
 import { Tutorial, tutorialSeen } from './tutorial.jsx'
 import { describeSocial } from './social.js'
-import { loadThumbnails, collageItems, repeatItems, seededRandom, drawCards, warpLayer, composeCollage, DEFAULT_FILL, DEFAULT_STICKER_SIZE, DEFAULT_TILT, DEFAULT_OVERLAP, MAX_TILT_LIMIT, MAX_OVERLAP_LIMIT, DEFAULT_TIDY_GAP, MAX_TIDY_GAP } from './collage.js'
+import { shuffle, loadThumbnails, collageItems, repeatItems, seededRandom, drawCards, warpLayer, composeCollage, DEFAULT_FILL, DEFAULT_STICKER_SIZE, DEFAULT_TILT, DEFAULT_OVERLAP, MAX_TILT_LIMIT, MAX_OVERLAP_LIMIT, DEFAULT_TIDY_GAP, MAX_TIDY_GAP } from './collage.js'
 import { SyncScreen } from './sync.jsx'
 import { shownPairing } from './sync.js'
 import { useReorder } from './reorder.js'
+import { animateShuffle } from './shuffle.js'
 
 const searchText = (card) => [card.name, ...card.collections, card.note, ...(card.socials || [])].join(' ').toLowerCase()
 const BACKUP_STALE_DAYS = 7
@@ -252,6 +253,8 @@ const packsEnabled = () => localStorage.getItem(PACKS_KEY) === '1'
 // Collage's Card count slider (Beta), likewise.
 const CARD_COUNT_KEY = 'collageCardCount'
 const cardCountEnabled = () => localStorage.getItem(CARD_COUNT_KEY) === '1'
+const SHUFFLE_KEY = 'shuffleCollections'
+const shuffleEnabled = () => localStorage.getItem(SHUFFLE_KEY) === '1'
 // Past this a collage takes a while to lay out and the cards are too small to see.
 const MAX_CARD_COUNT = 200
 // A gentle table-top view to start from: nearer edge wider than the far one.
@@ -714,14 +717,16 @@ const formatBytes = (bytes) => (bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFi
 
 // How much space photos take, split like iOS's iPhone Storage bar; and, while older photos are still being turned
 // into WebP in the background, how far that's got.
+const sizeOf = (photos) => photos.reduce((sum, photo) => sum + (photo instanceof Blob ? photo.size : 0), 0)
+const originalsSize = (cards) => sizeOf(cards.flatMap((card) => [card.frontOriginal, card.backOriginal]))
+
 function PhotoStorage({ cards }) {
-  const sizeOf = (photos) => photos.reduce((sum, photo) => sum + (photo instanceof Blob ? photo.size : 0), 0)
   const stickers = cards.filter((card) => card.kind === 'sticker')
   const named = cards.filter((card) => card.kind !== 'sticker')
   const segments = [
     { key: 'cards', label: t('Card photos'), bytes: sizeOf(named.flatMap((card) => [card.front, card.back])) },
     { key: 'stickers', label: t('Stickers'), bytes: sizeOf(stickers.map((card) => card.front)) },
-    { key: 'originals', label: t('Originals'), bytes: sizeOf(cards.flatMap((card) => [card.frontOriginal, card.backOriginal])) },
+    { key: 'originals', label: t('Originals'), bytes: originalsSize(cards) },
   ].filter((segment) => segment.bytes > 0)
   const total = segments.reduce((sum, segment) => sum + segment.bytes, 0)
   const converted = cards.filter((card) => IMAGE_FIELDS.every((field) => !(card[field] instanceof Blob) || card[field].type === 'image/webp')).length
@@ -819,6 +824,18 @@ function Settings({ cards, lastBackup, page, syncCode, onClose, onChanged, onSyn
       <section class="settings-group">
         <h2><Glyph name="storage" />{t('Storage')}</h2>
         <PhotoStorage cards={cards} />
+        {originalsSize(cards) > 0 && (
+          <>
+            <div class="settings-list">
+              <ArmedButton
+                label={t('Remove originals')}
+                armedLabel={t('Tap again to free {size}', { size: formatBytes(originalsSize(cards)) })}
+                onConfirm={() => run(() => removeOriginals(cards), t('Originals removed'))}
+              />
+            </div>
+            <p class="settings-note">{t('Originals are the uncropped photos, kept so a card can be cropped again. Without them, a crop can only be tightened. Backups made before keep them.')}</p>
+          </>
+        )}
       </section>
       <section class="settings-group">
         <h2><Glyph name="beta" />{t('More')}</h2>
@@ -920,6 +937,7 @@ function CollectionSheet({ chosen, events, onToggle, onClose, onDone }) {
 function BetaFeatures({ onDone }) {
   const [packs, setPacks] = useStoredState(PACKS_KEY)
   const [cardCount, setCardCount] = useStoredState(CARD_COUNT_KEY)
+  const [shuffling, setShuffling] = useStoredState(SHUFFLE_KEY)
   return (
     <>
       <BackHeader title={t('Beta features')} onBack={onDone} />
@@ -938,6 +956,13 @@ function BetaFeatures({ onDone }) {
         </label>
       </div>
       <p class="settings-note">{t('Adds a Card count slider to Collage, which repeats cards to fill a bigger collage.')}</p>
+      <div class="settings-list">
+        <label>
+          {t('Shuffle collections')}
+          <input type="checkbox" switch checked={shuffling === '1'} onChange={(e) => setShuffling(e.target.checked ? '1' : '')} />
+        </label>
+      </div>
+      <p class="settings-note">{t('Adds a Shuffle button to each collection, which puts its cards in a new random order.')}</p>
     </>
   )
 }
@@ -1029,6 +1054,28 @@ function List({ cards: items, tab, onTab, events, lastBackup, storageBroken, onO
   })
   // Reordering a filtered subset would be ambiguous, so it's off while searching.
   const canDrag = !selecting && !query.trim()
+  const [shuffling, setShuffling] = useState(false)
+  // The groups as they were when a shuffle began, shown until its deal: the list can reload mid-shuffle (photo upkeep,
+  // sync), and showing the new order then would pull the cards out from under the animation.
+  const frozenGroups = useRef(null)
+  async function shuffleCollection(event, group, section) {
+    if (!await ask(t('Shuffle {name}? Its current order is replaced.', { name: event || t('No collection') }), { confirm: t('Shuffle') })) return
+    const shuffled = shuffle([...group], Math.random)
+    frozenGroups.current = groups
+    setShuffling(true)
+    try {
+      // Saving rewrites every card's photos, which takes a while on a phone, so it runs during the animation, not after.
+      const saving = saveCards(shuffled.map((card, place) => ({ ...card, orders: { ...card.orders, [event]: place } })))
+      await animateShuffle(section.querySelector('.card-fans, .card-rows'), shuffled.map((card) => card.id), async () => {
+        await saving
+        frozenGroups.current = null
+        onChanged()
+      })
+    } finally {
+      frozenGroups.current = null
+      setShuffling(false)
+    }
+  }
 
   // The collection being sent as a pack, if any.
   const [packing, setPacking] = useState(null)
@@ -1049,7 +1096,7 @@ function List({ cards: items, tab, onTab, events, lastBackup, storageBroken, onO
       <div class="list-top">
       <header class="list-header">
         {/* Empty, the big logo in the middle stands in for this one. */}
-        <h1 class="logo">{items.length > 0 && <Logo />}</h1>
+        <h1 class="logo">{items.length > 0 && <button type="button" class="logo-button" aria-label={t('Reload')} onClick={reloadApp}><Logo /></button>}</h1>
         {/* The bottom bar holds the tabs and New, so Collage sits up here, as the one filled button. */}
         {!selecting && cards.length > 0 && <button type="button" class="nav-action collage-button" onClick={onGroupPhoto}><CollageIcon />{t('Collage')}</button>}
         {cards.length > 0 && (
@@ -1095,7 +1142,7 @@ function List({ cards: items, tab, onTab, events, lastBackup, storageBroken, onO
         </div>
       )}
       </div>
-      {groups.map(([event, group]) => {
+      {(frozenGroups.current ?? groups).map(([event, group]) => {
         // Mid-drag, the cards in their live order.
         const shown = drag?.group === event ? drag.ids.map((id) => group.find((card) => card.id === id)) : group
         const ids = group.map((card) => card.id)
@@ -1103,9 +1150,14 @@ function List({ cards: items, tab, onTab, events, lastBackup, storageBroken, onO
           <section key={event}>
             <div class="group-heading">
               <h2>{event || t('No collection')} <span class="group-count">{group.length}</span></h2>
+              {canDrag && group.length > 1 && shuffleEnabled() && (
+                <button type="button" class="icon-button group-shuffle" aria-label={t('Shuffle')} disabled={shuffling} onClick={(e) => shuffleCollection(event, group, e.currentTarget.closest('section'))}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" d="M2 7h4c1.7 0 2.6.7 3.5 2.2l4 6.6c.9 1.5 1.8 2.2 3.5 2.2h2M2 17h4c1.7 0 2.6-.7 3.5-2.2l.4-.7M13.7 9.3l.3-.4c.9-1.5 1.8-2.2 3.5-2.2H19" /><path fill="currentColor" d="M18 3.5 23 7l-5 3.5zM18 14.5l5 3.5-5 3.5z" /></svg>
+                </button>
+              )}
               {event && !selecting && packsEnabled() && (
                 <button type="button" class="nav-action pack-send" onClick={() => setPacking(event)}>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><rect x="3.5" y="8" width="17" height="5" rx="1" /><path d="M5 13v7h14v-7M12 8v12M12 8c-1.5-3.5-5.5-4-5.5-1.5C6.5 8 12 8 12 8zM12 8c1.5-3.5 5.5-4 5.5-1.5C17.5 8 12 8 12 8z" /></svg>{t('Send pack')}<span class="beta-tag">Beta</span>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><rect x="3.5" y="8" width="17" height="5" rx="1" /><path d="M5 13v7h14v-7M12 8v12M12 8c-1.5-3.5-5.5-4-5.5-1.5C6.5 8 12 8 12 8zM12 8c1.5-3.5 5.5-4 5.5-1.5C17.5 8 12 8 12 8z" /></svg>{t('Send pack')}
                 </button>
               )}
               {selecting && (() => {

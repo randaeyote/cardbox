@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { planSync, planDeletes, packIds, PACK_SIZE, parsePairing, parseSyncLink, parseReceiveLink, pairingProof, mergeTied, contentOf } from './sync.js'
+import { planSync, planDeletes, packIds, PACK_SIZE, parsePairing, parseSyncLink, parseReceiveLink, pairingProof, mergeTied, contentOf, keepOriginals, planOriginals } from './sync.js'
 
 // cards: { id: time } or { id: [time, content] }, for brevity.
 const state = (cards = {}) => Object.fromEntries(Object.entries(cards).map(([id, value]) => {
@@ -58,4 +58,27 @@ assert.notEqual(hostProof, await pairingProof('wrong-secret-0123456789', 'host',
 assert.notEqual(hostProof, await pairingProof(secret, 'host', 'relay-print', 'guest-print'))
 // Bounced back to the host, which expects a guest's proof over the same two fingerprints.
 assert.notEqual(hostProof, await pairingProof(secret, 'guest', 'guest-print', 'host-print'))
+// A received card without originals keeps the ones here: with their crop details while the cropped photo is the same,
+// with only the corner radius once it's different; and a card that brings its own originals keeps those.
+{
+  const photo = (size) => ({ size })
+  const ours = { id: 'k', front: photo(10), frontOriginal: photo(99), frontEdit: { corners: [1], radius: 0.1 }, back: photo(20), backOriginal: photo(88), backEdit: { corners: [2], radius: 0.2 } }
+  const received = { id: 'k', name: 'New', front: photo(10), frontOriginal: null, frontEdit: { radius: 0.1 }, back: photo(21), backOriginal: null, backEdit: { rotation: 90, radius: 0.3 } }
+  const kept = keepOriginals(received, ours)
+  assert.equal(kept.name, 'New')
+  assert.equal(kept.frontOriginal, ours.frontOriginal)
+  assert.deepEqual(kept.frontEdit, ours.frontEdit)
+  assert.equal(kept.backOriginal, ours.backOriginal)
+  assert.deepEqual(kept.backEdit, { radius: 0.3 })
+  const own = { ...received, frontOriginal: photo(77) }
+  assert.equal(keepOriginals(own, ours).frontOriginal, own.frontOriginal)
+  assert.equal(keepOriginals(received, undefined), received)
+}
+
+// Listed for review: cards here with originals the other device has without; not a device that doesn't say.
+assert.deepEqual(planOriginals(
+  { a: { originals: true }, b: { originals: true }, c: { originals: false }, d: { originals: true } },
+  { a: { originals: false }, b: { originals: true }, c: { originals: false }, d: {}, e: { originals: false } },
+), ['a'])
+
 console.log('sync tests passed')

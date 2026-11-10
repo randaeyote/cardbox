@@ -94,6 +94,21 @@ export async function storeCard(card) {
 async function storeCards(cards) {
   for (const card of cards) await storeCard(card)
 }
+// Settings → Storage: drops the uncropped photos kept for re-cropping. Each side's edit goes too (its corners, rotation
+// and enhancement were measured on the original), all but the corner radius, which the cropped photo still shows.
+// Not stamped as an edit: this saves space on this device only, so sync mustn't carry it to the others.
+export async function removeOriginals(cards) {
+  for (const card of cards.filter((card) => card.frontOriginal || card.backOriginal)) {
+    const trimmed = { ...card }
+    for (const side of ['front', 'back']) {
+      if (!card[`${side}Original`]) continue
+      trimmed[`${side}Original`] = null
+      const radius = card[`${side}Edit`]?.radius
+      trimmed[`${side}Edit`] = radius ? { radius } : null
+    }
+    await storeCard(trimmed)
+  }
+}
 // A user's edit: stamped so sync knows it's the newest version.
 export const saveCard = (card) => storeCard({ ...card, updatedAt: new Date().toISOString() })
 export async function saveCards(cards) {

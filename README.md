@@ -1,12 +1,15 @@
 # Cardbox
 
-A PWA for keeping photos of business cards. Cards stay on the device (IndexedDB); there is no server or account.
+整理收藏卡片和貼紙的小工具：拍照自動裁切、分合集、做拼貼、傳給朋友。免安裝，資料只存在自己的手機。
 
-- **Capture:** shoot a stack of cards in a row, front then back. Edges are found and cropped automatically (OpenCV), and you can adjust any crop by hand.
-- **Organise:** name, collection, social links and notes per card. Social links can be filled in by scanning a QR code on the card.
-- **Collage:** lay out a collection as one shareable image.
-- **Sync:** pair two devices with a one-time code or QR. Cards go directly between them over WebRTC (PeerJS); the relay only connects them. Choose "Add only" or a full two-way sync.
-- **Backup:** export and import a zip of all cards and photos.
+A PWA for photos of collectible cards and stickers. Everything stays on the device (IndexedDB); no account, no server storage.
+
+- **Capture:** shoot cards front then back; edges are found and cropped automatically (OpenCV). Stickers are cut out.
+- **Organise:** names, collections, social links (scan a QR on the card), notes. Flick a card to turn it over.
+- **Collage:** a collection as one shareable image.
+- **Share:** send cards as a QR stream (offline) or as a pack over the network.
+- **Sync:** pair two devices; cards go directly over WebRTC (PeerJS), via a TURN relay only when needed.
+- **Backup:** zip export and import.
 - English and Traditional Chinese.
 
 ## Development
@@ -36,14 +39,17 @@ Camera access needs HTTPS or localhost. To try it on a phone, serve the preview 
 | File | What it does |
 | --- | --- |
 | `src/app.jsx` | Screens and routing (hash based: `#card/<id>`, `#rapid`, `#group`, `#settings`, `#sync`) |
-| `src/rapid.jsx` | Camera and review for capturing a stack of cards |
+| `src/rapid.jsx` | Camera and review for capturing a stack of cards or stickers |
+| `src/card3d.jsx` | The card that turns over in 3D |
 | `src/crop.js`, `src/cropper.jsx` | Edge detection, perspective crop, and the manual crop editor |
 | `src/db.js` | Card storage in IndexedDB |
 | `src/sync.js`, `src/sync.jsx` | Device-to-device sync |
+| `src/beam.js`, `src/beam.jsx`, `src/pack.jsx` | Sending cards: QR stream, network packs, and the pack opening |
 | `src/backup.js` | Zip export and import |
 | `src/collage.js` | Collage layout and drawing |
 | `src/qr.js` | QR scanning |
 | `src/i18n.js`, `src/zh-Hant.js` | Translations; strings are keyed by their English text |
 | `src/ui.jsx` | Shared components |
+| `worker/index.js` | Cloudflare Worker: serves the app, and short-lived TURN relay passwords at `/turn` |
 
 `test-images/` holds the sample photos the edge-detection thresholds were tuned on.

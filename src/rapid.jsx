@@ -27,6 +27,10 @@ export function RapidCapture({ events, mode, onDone, onChanged, onCode, setLeave
   return <Review shots={shots} events={events} onDone={onDone} onChanged={onChanged} setLeaveGuard={setLeaveGuard} />
 }
 
+// Cards (or stickers) shot before Done must save them: until then they live only in memory, so a crash, a reload or
+// iOS clearing the page loses the lot. This caps the loss.
+const MAX_BATCH = 10
+
 const SHAPE_KEY = 'cameraCardShape'
 const SCAN_DIMENSION = 800
 const SCAN_INTERVAL = 200
@@ -82,7 +86,7 @@ export function Camera({ initialMode, single = false, onFinish, onCancel, onCode
 
   function shoot() {
     const video = videoRef.current
-    if (!video?.videoWidth) return
+    if (!video?.videoWidth || room <= 0) return
     // The frame is grabbed now, at the tap; encoding it can finish later.
     const canvas = document.createElement('canvas')
     canvas.width = video.videoWidth
@@ -133,6 +137,8 @@ export function Camera({ initialMode, single = false, onFinish, onCancel, onCode
 
   const { cards, pendingFront } = shots
   const finished = pendingFront ? [...cards, { front: pendingFront, back: null }] : cards
+  // Photos still allowed before Done: a card takes two (front and back), a sticker one.
+  const room = single ? 1 : stickers ? MAX_BATCH - cards.length : (MAX_BATCH - cards.length) * 2 - (pendingFront ? 1 : 0)
   useEffect(() => {
     setLeaveGuard(finished.length ? () => confirmDiscard(finished.length) : null)
   }, [finished.length])
@@ -174,7 +180,7 @@ export function Camera({ initialMode, single = false, onFinish, onCancel, onCode
       {content}
       <input
         type="file" accept="image/*" multiple={!single} hidden
-        onChange={(e) => { const files = [...e.target.files]; e.target.value = ''; files.forEach((file) => addShot(file, URL.createObjectURL(file))) }}
+        onChange={(e) => { const files = [...e.target.files]; e.target.value = ''; files.slice(0, room).forEach((file) => addShot(file, URL.createObjectURL(file))) }}
       />
     </label>
   )
@@ -219,6 +225,7 @@ export function Camera({ initialMode, single = false, onFinish, onCancel, onCode
         {!single && (
           <p class="rapid-status">
             {scanning ? qr.error ?? (qr.progress ? progressText(qr.progress) : t('Point the camera at a Cardbox QR code.'))
+              : room <= 0 ? t('That’s {count}, the most at once. Tap Done to save them.', { count: MAX_BATCH })
               : stickers
               ? t('Capture sticker {number}', { number: cardNumber })
               : pendingFront ? t('Capture back of card {number}, or skip', { number: cardNumber }) : t('Capture front of card {number}', { number: cardNumber })}
@@ -233,7 +240,7 @@ export function Camera({ initialMode, single = false, onFinish, onCancel, onCode
               <span class="rapid-last-discard" aria-hidden="true">✕</span>
             </button>
           ) : libraryPicker('button icon-button', LIBRARY_ICON)}
-          <button type="button" class="rapid-shutter" disabled={!!error || (single && processing > 0)} onClick={shoot} aria-label={stickers ? t('Take sticker') : pendingFront ? t('Take back') : t('Take front')} />
+          <button type="button" class="rapid-shutter" disabled={!!error || room <= 0 || (single && processing > 0)} onClick={shoot} aria-label={stickers ? t('Take sticker') : pendingFront ? t('Take back') : t('Take front')} />
           <button type="button" class="rapid-no-back glass" disabled={!pendingFront} hidden={stickers || single} onClick={noBack}>{t('Skip')}</button>
         </div>
         {/* Like the Camera app's Photo / Video: locked while a card is waiting for its back. */}

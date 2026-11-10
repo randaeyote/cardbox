@@ -134,6 +134,7 @@ function NetworkSend({ ids, pack = null, resumed = null }) {
           <p class="muted">{t('Scan with the other phone’s camera, or Cardbox’s camera in QR mode. Both phones need internet.')}</p>
         </>
       )}
+      {(stage === 'waiting' || stage === 'sending') && <p class="stay-hint">{t('Keep this screen open and the phone awake until it’s received.')}</p>}
       {stage === 'sending' && <p class="beam-estimate">{t('Sending…')}</p>}
       {stage === 'sent' && <p class="beam-estimate">{t('Sent ✓')}</p>}
       {stage === 'error' && <p class="cropper-error">{error}</p>}
@@ -218,7 +219,12 @@ export function BeamReceive({ code, onDone, onPackDone, onClose }) {
   return (
     <main class="beam">
       <BackHeader title={t('Receiving…')} onBack={onClose} />
-      {error ? <p class="cropper-error">{error}</p> : <p class="beam-estimate">{t('Receiving…')}</p>}
+      {error ? <p class="cropper-error">{error}</p> : (
+        <>
+          <p class="beam-estimate">{t('Receiving…')}</p>
+          <p class="stay-hint">{t('Keep this screen open until it’s received.')}</p>
+        </>
+      )}
     </main>
   )
 }

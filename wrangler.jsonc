@@ -7,5 +7,6 @@
   "routes": [{ "pattern": "cardbox.claws.blue", "custom_domain": true }],
   // The home server's TURN relay (coturn). TURN_SECRET, its shared secret, is a Worker secret. A name, not the IP:
   // ~/coturn/update-ip.py on the server (cron) keeps it, and coturn's external-ip, on the current public IP.
+  // /turn is rate-limited per IP by a WAF rate limiting rule on the claws.blue zone ("turn credentials", dashboard).
   "vars": { "TURN_HOST": "turn.claws.blue" }
 }

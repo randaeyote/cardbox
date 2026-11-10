@@ -41,6 +41,8 @@ export function PackOpening({ cards, name, onDone }) {
   // sealed → torn (the top flying off) → revealing → summary.
   const [stage, setStage] = useState('sealed')
   const [tear, setTear] = useState(0)
+  // Which way the finger slides, either works; the strip tears off from the end it starts at.
+  const [tearLeft, setTearLeft] = useState(false)
   // Whether the screen has been touched yet; the swipe hint shows until then.
   const [touched, setTouched] = useState(false)
   const startRef = useRef(null)
@@ -71,7 +73,9 @@ export function PackOpening({ cards, name, onDone }) {
   function tearMove(event) {
     if (!startRef.current) return
     const width = packRef.current.getBoundingClientRect().width
-    const progress = Math.min(1, Math.abs(event.clientX - startRef.current.x) / (width * TEAR_DISTANCE))
+    const dx = event.clientX - startRef.current.x
+    const progress = Math.min(1, Math.abs(dx) / (width * TEAR_DISTANCE))
+    if (dx) setTearLeft(dx < 0)
     setTear(progress)
     if (progress === 1) open()
   }
@@ -176,7 +180,7 @@ export function PackOpening({ cards, name, onDone }) {
           )}
           <div
             ref={packRef}
-            class={`pack${stage === 'sealed' ? '' : ' torn'}`}
+            class={`pack${stage === 'sealed' ? '' : ' torn'}${tearLeft ? ' tear-left' : ''}`}
             style={{ '--tear': tear }}
           >
             {stage === 'sealed' && !touched && <div class="pack-finger" />}

@@ -77,9 +77,11 @@ export async function pairingProof(secret, role, ourFingerprint, theirFingerprin
 const fingerprintOf = (description) => description?.sdp.match(/a=fingerprint:(\S+ \S+)/)?.[1] ?? ''
 
 // A card's content apart from its photos' bytes, to tell two copies with the same edit time apart.
+// Originals, and the crop details measured on them, are left out: Settings → Storage can remove them on one device
+// only, and that mustn't make the copies differ.
 export const contentOf = (card) => JSON.stringify([
   card.name ?? '', card.socials ?? [], card.collections ?? [], card.note ?? '', card.orders ?? {}, card.size ?? null,
-  card.frontEdit ?? null, card.backEdit ?? null, IMAGE_FIELDS.map((field) => card[field]?.size ?? 0),
+  card.frontEdit?.radius ?? null, card.backEdit?.radius ?? null, (card.front?.size ?? 0), (card.back?.size ?? 0),
 ])
 
 // Which of the other device's cards this device should fetch: those missing here or edited more recently there, but
@@ -98,10 +100,30 @@ export function planSync(local, remote, deleted = {}) {
 // The cards here that the other device deleted after they were last edited. Sync never deletes them itself: they're
 // listed for the user to confirm (see SyncScreen). An edit after the delete wins, and the card goes back instead.
 // theirDeleted: the other device's { [id]: time } of deletes.
+// The cards here with originals that the other device has removed (Settings → Storage). Sync never removes them
+// itself: they're listed for the user to confirm, like deletes. A device on an older Cardbox doesn't say, so its cards
+// are never listed.
+export const planOriginals = (local, remote) => Object.keys(remote).filter((id) => local[id]?.originals && remote[id].originals === false)
 export const planDeletes = (local, theirDeleted) => Object.keys(theirDeleted).filter((id) => local[id] && theirDeleted[id] > local[id].time)
 
 // Combines two copies of a card with the same edit time, so neither loses anything: all socials and collections, and
 // for each text field the filled-in (or longer) value. Gives the same result whichever copy is `a`, so both devices agree.
+// A received card never takes away an original this device still has (Settings → Storage removes them on one device
+// only). Kept with its crop details if the cropped photo is the same one; if the sender changed it (recropped from its
+// cropped photo), those details no longer fit, so only the corner radius is kept with it.
+export function keepOriginals(received, ours) {
+  if (!ours) return received
+  const kept = { ...received }
+  for (const side of ['front', 'back']) {
+    const original = ours[`${side}Original`]
+    if (!original || received[`${side}Original`]) continue
+    kept[`${side}Original`] = original
+    const radius = received[`${side}Edit`]?.radius
+    kept[`${side}Edit`] = received[side]?.size === ours[side]?.size ? ours[`${side}Edit`] : radius ? { radius } : null
+  }
+  return kept
+}
+
 export function mergeTied(a, b) {
   const [first, second] = contentOf(a) <= contentOf(b) ? [a, b] : [b, a]
   const pick = (x = '', y = '') => (y.length > x.length ? y : x)
@@ -120,7 +142,7 @@ export function mergeTied(a, b) {
 // offer: the ids this device shares (null = all).
 async function localCards(offer = null) {
   const cards = (await listCards()).filter((card) => !offer || offer.includes(card.id))
-  return Object.fromEntries(cards.map((card) => [card.id, { time: cardTime(card), content: contentOf(card) }]))
+  return Object.fromEntries(cards.map((card) => [card.id, { time: cardTime(card), content: contentOf(card), originals: !!(card.frontOriginal || card.backOriginal) }]))
 }
 
 // The sizes of a card's photos, sent with a request so the other device can skip photos we already have.
@@ -156,8 +178,9 @@ export function packIds(ids, random = Math.random) {
 }
 
 // Both devices run the same exchange: send their cards' edit times and deletes, pull the cards they need a few at a
-// time, then say done. Resolves when both are done with { received, sent, ids, deleted, pack } (ids: the cards received;
-// deleted: the cards here the other device deleted, still to confirm; pack: the other device's, as below).
+// time, then say done. Resolves when both are done with { received, sent, ids, deleted, originals, pack } (ids: the
+// cards received; deleted: the cards here the other device deleted, still to confirm; originals: the cards here whose
+// originals the other device removed, also to confirm; pack: the other device's, as below).
 // pack, sending one: { name, ids } (ids in pack order, repeats and all), passed on for the receiver to open; offer
 // should be its ids.
 // offer limits which cards this side lists and hands over (null = all); fetch false takes nothing. Handing one card to
@@ -166,7 +189,7 @@ export function packIds(ids, random = Math.random) {
 // side's proof checks out.
 function exchange(connection, onProgress, { role, secret, onVerified, offer = null, fetch = true, pack = null }) {
   return new Promise((resolve, reject) => {
-    const counts = { received: 0, sent: 0, ids: [], deleted: [], pack: null }
+    const counts = { received: 0, sent: 0, ids: [], deleted: [], originals: [], pack: null }
     let queue = null
     let total = 0
     let inFlight = 0
@@ -208,6 +231,8 @@ function exchange(connection, onProgress, { role, secret, onVerified, offer = nu
         // A card handed over (offer set here too) is taken even if it was deleted here: only a full sync keeps it gone.
         const wanted = fetch ? planSync(here, message.cards, offer ? {} : await listDeleted()) : []
         if (fetch) counts.deleted = planDeletes(here, message.deleted ?? {})
+        // Like deletes, only in a full sync: handing one card over isn't a say in what this device keeps.
+        if (fetch && !offer) counts.originals = planOriginals(here, message.cards)
         if (fetch) counts.pack = message.pack ?? null
         queue = wanted
         total = wanted.length
@@ -221,7 +246,7 @@ function exchange(connection, onProgress, { role, secret, onVerified, offer = nu
         if (message.card) {
           const ours = await getCard(message.id)
           const theirs = unpackCard(message.card, ours)
-          const next = ours && cardTime(ours) === cardTime(theirs) ? mergeTied(ours, theirs) : theirs
+          const next = keepOriginals(ours && cardTime(ours) === cardTime(theirs) ? mergeTied(ours, theirs) : theirs, ours)
           if (!ours || contentOf(next) !== contentOf(ours)) {
             await storeCard(next)
             counts.received++
